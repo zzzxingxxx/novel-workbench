@@ -42,6 +42,43 @@ def get_chapter(db: Session, chapter_id: str) -> Chapter:
     return chapter
 
 
+def validate_operation_payload(db: Session, chapter: Chapter, data: OperationCreate) -> None:
+    payload = data.payload
+    if data.type == "append":
+        if not isinstance(payload.get("new_text"), str):
+            raise HTTPException(
+                422, detail={"code": "invalid_operation", "message": "append requires new_text"}
+            )
+    elif data.type == "replace_range":
+        start, end, new_text = payload.get("from"), payload.get("to"), payload.get("new_text")
+        if (
+            not isinstance(start, int)
+            or not isinstance(end, int)
+            or not isinstance(new_text, str)
+            or start < 0
+            or end < start
+            or end > len(chapter.content)
+        ):
+            raise HTTPException(
+                422,
+                detail={
+                    "code": "invalid_operation",
+                    "message": "replace_range requires valid from, to and new_text",
+                },
+            )
+    elif data.type == "restore_revision":
+        revision_id = payload.get("revision_id")
+        revision = db.get(Revision, revision_id) if isinstance(revision_id, str) else None
+        if not revision or revision.chapter_id != chapter.id:
+            raise HTTPException(
+                422,
+                detail={
+                    "code": "invalid_operation",
+                    "message": "revision does not belong to chapter",
+                },
+            )
+
+
 def create_revision(
     db: Session, chapter: Chapter, source: str, operation_id: str | None = None
 ) -> Revision:
@@ -68,10 +105,25 @@ def create_operation(db: Session, data: OperationCreate) -> Operation:
             select(Operation).where(Operation.idempotency_key == data.idempotency_key)
         )
         if existing:
+            if (existing.project_id, existing.target_id, existing.type, existing.payload) != (
+                data.project_id,
+                data.target_id,
+                data.type,
+                data.payload,
+            ):
+                raise HTTPException(
+                    409,
+                    detail={
+                        "code": "idempotency_conflict",
+                        "message": "idempotency key was already used for another operation",
+                    },
+                )
             return existing
+    get_project(db, data.project_id)
     chapter = get_chapter(db, data.target_id)
     if chapter.volume.project_id != data.project_id:
         raise HTTPException(status_code=400, detail="target does not belong to project")
+    validate_operation_payload(db, chapter, data)
     operation = Operation(
         project_id=data.project_id,
         target_type=data.target_type,
@@ -122,28 +174,13 @@ def approve_operation(db: Session, operation_id: str) -> Operation:
         start = operation.payload.get("from")
         end = operation.payload.get("to")
         new_text = operation.payload.get("new_text")
-        if (
-            not isinstance(start, int)
-            or not isinstance(end, int)
-            or not isinstance(new_text, str)
-            or start < 0
-            or end < start
-            or end > len(old_content)
-        ):
-            raise HTTPException(
-                status_code=422, detail="replace_range requires valid from, to and new_text"
-            )
         chapter.content = old_content[:start] + new_text + old_content[end:]
     elif operation.type == "append":
         new_text = operation.payload.get("new_text")
-        if not isinstance(new_text, str):
-            raise HTTPException(status_code=422, detail="append requires new_text")
         chapter.content = old_content + new_text
     elif operation.type == "restore_revision":
         revision_id = operation.payload.get("revision_id")
         revision = db.get(Revision, revision_id) if isinstance(revision_id, str) else None
-        if not revision or revision.chapter_id != chapter.id:
-            raise HTTPException(status_code=422, detail="revision does not belong to chapter")
         chapter.content = revision.content
     chapter.word_count = len(chapter.content)
     chapter.content_hash = content_hash(chapter.content)

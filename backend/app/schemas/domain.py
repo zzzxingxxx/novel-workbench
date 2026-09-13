@@ -147,3 +147,35 @@ class RevisionRead(BaseModel):
     source: str
     operation_id: str | None
     created_at: datetime
+
+
+class PageMeta(BaseModel):
+    page: int
+    page_size: int
+    total: int
+    has_next: bool
+
+
+class ProjectPage(BaseModel):
+    items: list[ProjectRead]
+    meta: PageMeta
+
+
+class VolumePage(BaseModel):
+    items: list[VolumeRead]
+    meta: PageMeta
+
+
+class ChapterPage(BaseModel):
+    items: list[ChapterRead]
+    meta: PageMeta
+
+
+class EntityPage(BaseModel):
+    items: list[EntityRead]
+    meta: PageMeta
+
+
+class NotePage(BaseModel):
+    items: list[NoteRead]
+    meta: PageMeta

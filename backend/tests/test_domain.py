@@ -131,3 +131,124 @@ def test_project_tree_and_rename(client):
     tree = client.get(f"/api/v1/projects/{project['id']}/tree").json()
     assert tree["volumes"][0]["id"] == volume["id"]
     assert tree["volumes"][0]["chapters"][0]["id"] == chapter["id"]
+
+
+def test_pagination_and_chapter_listing(client):
+    project, volume, _ = setup_tree(client)
+    client.post(
+        f"/api/v1/volumes/{volume['id']}/chapters", json={"title": "第二章", "content": "更多"}
+    )
+    page = client.get("/api/v1/projects?page=1&page_size=1")
+    assert page.status_code == 200
+    assert page.json()["meta"] == {"page": 1, "page_size": 1, "total": 1, "has_next": False}
+    chapters = client.get(f"/api/v1/volumes/{volume['id']}/chapters?page=1&page_size=1").json()
+    assert chapters["meta"]["total"] == 2
+    assert len(chapters["items"]) == 1
+    assert client.get(f"/api/v1/projects/{project['id']}/volumes?page_size=101").status_code == 422
+
+
+def test_json_and_zip_round_trip(client):
+    project, _, chapter = setup_tree(client)
+    client.post(
+        f"/api/v1/projects/{project['id']}/entities", json={"kind": "character", "name": "林默"}
+    )
+    json_export = client.get(f"/api/v1/projects/{project['id']}/export?format=json")
+    assert json_export.status_code == 200
+    assert json_export.headers["content-type"].startswith("application/json")
+    imported = client.post(
+        "/api/v1/projects/import",
+        content=json_export.content,
+        headers={"content-type": "application/json"},
+    )
+    assert imported.status_code == 201
+    imported_id = imported.json()["id"]
+    imported_tree = client.get(f"/api/v1/projects/{imported_id}/tree").json()
+    assert imported_tree["volumes"][0]["chapters"][0]["id"] != chapter["id"]
+    assert imported_tree["volumes"][0]["chapters"][0]["title"] == "第一章"
+
+    zip_export = client.get(f"/api/v1/projects/{project['id']}/export?format=zip")
+    assert zip_export.status_code == 200
+    restored = client.post(
+        "/api/v1/projects/import",
+        content=zip_export.content,
+        headers={"content-type": "application/zip"},
+    )
+    assert restored.status_code == 201
+
+
+def test_invalid_import_does_not_change_existing_projects(client):
+    setup_tree(client)
+    before = len(client.get("/api/v1/projects").json())
+    invalid = {
+        "schema_version": "1.0",
+        "project": {
+            "name": "坏包",
+            "volumes": [
+                {
+                    "title": "重复位置",
+                    "position": 0,
+                    "chapters": [
+                        {"title": "一", "position": 0, "content": "a"},
+                        {"title": "二", "position": 0, "content": "b"},
+                    ],
+                }
+            ],
+            "entities": [],
+            "notes": [],
+        },
+    }
+    response = client.post(
+        "/api/v1/projects/import",
+        json=invalid,
+    )
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "unique_constraint"
+    assert len(client.get("/api/v1/projects").json()) == before
+
+
+def test_operation_validation_and_idempotency_conflict(client):
+    project, _, chapter = setup_tree(client)
+    invalid = client.post(
+        "/api/v1/operations",
+        json={
+            "project_id": project["id"],
+            "target_id": chapter["id"],
+            "type": "append",
+            "payload": {},
+        },
+    )
+    assert invalid.status_code == 422
+    assert invalid.json()["error"]["code"] == "invalid_operation"
+    operation = client.post(
+        "/api/v1/operations",
+        json={
+            "project_id": project["id"],
+            "target_id": chapter["id"],
+            "type": "append",
+            "payload": {"new_text": "A"},
+            "idempotency_key": "same-key",
+        },
+    )
+    duplicate = client.post(
+        "/api/v1/operations",
+        json={
+            "project_id": project["id"],
+            "target_id": chapter["id"],
+            "type": "append",
+            "payload": {"new_text": "B"},
+            "idempotency_key": "same-key",
+        },
+    )
+    assert operation.status_code == 201
+    assert duplicate.status_code == 409
+    assert duplicate.json()["error"]["code"] == "idempotency_conflict"
+
+
+def test_data_survives_engine_reconnect(client):
+    from app.db import session
+
+    project, _, _ = setup_tree(client)
+    session.engine.dispose()
+    response = client.get(f"/api/v1/projects/{project['id']}")
+    assert response.status_code == 200
+    assert response.json()["name"] == "测试作品"
