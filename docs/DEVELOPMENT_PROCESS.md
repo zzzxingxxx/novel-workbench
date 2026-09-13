@@ -213,6 +213,24 @@ CI 首先只做：安装、格式检查、类型检查、单元测试、前端�
 - 模型超时不会把章节写入半成品。
 - API Key 不出现在 API 响应和普通日志中。
 
+### 7.4 阶段 3 实现状态（Provider + SSE）
+
+阶段 3 已完成单 Provider 的可恢复 AI 流式闭环：
+
+- 新增 Provider CRUD、启用/禁用、连接测试和模型配置；首发适配 OpenAI-compatible
+  `/chat/completions` 流式协议，并提供 `mock://writer` 离线测试 Provider；
+- API Key 只写入加密字段，使用 Fernet 加密，密钥由 `NOVEL_WORKBENCH_PROVIDER_SECRET`
+  派生，响应中只返回 `has_api_key`；
+- 新增 AI session、user/assistant message 和持久化 SSE event 表，迁移为 `0002_ai_provider_sse`；
+- `POST /ai/sessions/{id}/messages` 返回 202，后台任务负责调用 Provider，避免长请求阻塞；
+- SSE 事件保存单调递增 session sequence，支持 `Last-Event-ID` 断线续传和事件回放；
+- 支持取消、Provider 错误标准化、消息幂等键和跨线程取消通知；
+- AI 输出只生成 `assistant.operation_preview`，正文仍须通过 operation approve 写入；
+- 前端助手已接入真实 session、EventSource 流式 delta、失败提示和待审批操作标识，演示项目继续使用本地 fallback；
+- 已覆盖 Provider 密钥脱敏、mock SSE、事件续传、消息幂等、无 Provider 失败和 migration 升降级测试。
+
+阶段 3 暂不包含多 Provider 自动路由、系统提示词版本管理、SSE 事件清理任务和长任务 jobs 表；这些功能按后续阶段接入。
+
 ## 8. 系统提示词管理
 
 ### 8.1 提示词数据结构

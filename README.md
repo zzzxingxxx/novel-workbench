@@ -49,3 +49,17 @@ The ZIP contains `manifest.json` and `project.json` (with a reserved `attachment
 Import the returned bytes with `POST /api/v1/projects/import` using `application/json` or
 `application/zip`; ZIP requests may also send `X-Filename: backup.zip`. Imports are restored as
 a new project with remapped IDs, and invalid packages are rejected before commit.
+
+## Stage 3 AI API
+
+Configure an OpenAI-compatible provider with `POST /api/v1/providers`. API keys are encrypted
+at rest with a Fernet key derived from `NOVEL_WORKBENCH_PROVIDER_SECRET`; provider APIs only
+return `has_api_key`. For local development, use `base_url: "mock://writer"` to exercise the
+complete flow without an external model.
+
+Create a session with `POST /api/v1/ai/sessions`, then submit a message to
+`POST /api/v1/ai/sessions/{session_id}/messages`. The message endpoint returns `202`; consume
+the persisted stream at `GET /api/v1/ai/sessions/{session_id}/events`. SSE `id` values are
+session-scoped, and a `Last-Event-ID` header or `last_event_id` query resumes from that sequence.
+AI output only creates a pending operation preview; it never changes chapter content until the
+existing approve endpoint is called.

@@ -252,3 +252,85 @@ def test_data_survives_engine_reconnect(client):
     response = client.get(f"/api/v1/projects/{project['id']}")
     assert response.status_code == 200
     assert response.json()["name"] == "测试作品"
+
+
+def test_provider_crud_masks_key_and_mock_test(client):
+    created = client.post(
+        "/api/v1/providers",
+        json={
+            "name": "本地演示模型",
+            "base_url": "mock://writer",
+            "model": "demo-1",
+            "api_key": "secret-value",
+        },
+    )
+    assert created.status_code == 201
+    provider = created.json()
+    assert provider["has_api_key"] is True
+    assert "secret-value" not in created.text
+    tested = client.post(f"/api/v1/providers/{provider['id']}/test")
+    assert tested.status_code == 200
+    assert tested.json()["ok"] is True
+    patched = client.patch(f"/api/v1/providers/{provider['id']}", json={"api_key": None})
+    assert patched.status_code == 200
+    assert patched.json()["has_api_key"] is False
+
+
+def test_ai_session_mock_sse_resume_and_operation_preview(client):
+    project, _, chapter = setup_tree(client)
+    provider = client.post(
+        "/api/v1/providers",
+        json={"name": "演示", "base_url": "mock://writer", "model": "demo-1"},
+    ).json()
+    session = client.post(
+        "/api/v1/ai/sessions",
+        json={
+            "project_id": project["id"],
+            "provider_id": provider["id"],
+            "system_prompt": "保持克制、具体，不替用户做最终决定。",
+        },
+    )
+    assert session.status_code == 201
+    message = client.post(
+        f"/api/v1/ai/sessions/{session.json()['id']}/messages",
+        json={
+            "content": "续写这一段",
+            "chapter_id": chapter["id"],
+            "idempotency_key": "ai-message-1",
+        },
+    )
+    assert message.status_code == 202
+    duplicate = client.post(
+        f"/api/v1/ai/sessions/{session.json()['id']}/messages",
+        json={
+            "content": "续写这一段",
+            "chapter_id": chapter["id"],
+            "idempotency_key": "ai-message-1",
+        },
+    )
+    assert duplicate.status_code == 202
+    events = client.get(f"/api/v1/ai/sessions/{session.json()['id']}/events")
+    assert events.status_code == 200
+    assert "event: session.started" in events.text
+    assert "event: context.ready" in events.text
+    assert "event: assistant.delta" in events.text
+    assert "event: assistant.operation_preview" in events.text
+    assert "secret-value" not in events.text
+    resumed = client.get(f"/api/v1/ai/sessions/{session.json()['id']}/events?last_event_id=2")
+    assert resumed.status_code == 200
+    assert "event: assistant.delta" in resumed.text
+    messages = client.get(f"/api/v1/ai/sessions/{session.json()['id']}/messages").json()
+    assert [item["role"] for item in messages] == ["user", "assistant"]
+    assert client.get(f"/api/v1/chapters/{chapter['id']}").json()["content"] == "旧内容"
+
+
+def test_ai_session_without_provider_emits_failure(client):
+    project, _, _ = setup_tree(client)
+    session = client.post("/api/v1/ai/sessions", json={"project_id": project["id"]}).json()
+    message = client.post(
+        f"/api/v1/ai/sessions/{session['id']}/messages", json={"content": "测试失败"}
+    )
+    assert message.status_code == 202
+    events = client.get(f"/api/v1/ai/sessions/{session['id']}/events")
+    assert events.status_code == 200
+    assert "event: assistant.failed" in events.text

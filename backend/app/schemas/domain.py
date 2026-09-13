@@ -179,3 +179,89 @@ class EntityPage(BaseModel):
 class NotePage(BaseModel):
     items: list[NoteRead]
     meta: PageMeta
+
+
+class ProviderCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    kind: Literal["openai_compatible"] = "openai_compatible"
+    base_url: str = Field(min_length=1, max_length=500)
+    model: str = Field(min_length=1, max_length=200)
+    api_key: str | None = Field(default=None, max_length=500)
+    enabled: bool = True
+    timeout_seconds: int = Field(default=90, ge=5, le=600)
+
+
+class ProviderPatch(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=120)
+    base_url: str | None = Field(default=None, min_length=1, max_length=500)
+    model: str | None = Field(default=None, min_length=1, max_length=200)
+    api_key: str | None = Field(default=None, max_length=500)
+    enabled: bool | None = None
+    timeout_seconds: int | None = Field(default=None, ge=5, le=600)
+
+
+class ProviderRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: str
+    name: str
+    kind: str
+    base_url: str
+    model: str
+    enabled: bool
+    timeout_seconds: int
+    has_api_key: bool
+    created_at: datetime
+    updated_at: datetime
+
+
+class AiSessionCreate(BaseModel):
+    project_id: str
+    provider_id: str | None = None
+    model: str | None = Field(default=None, max_length=200)
+    system_prompt: str | None = None
+
+
+class AiSessionRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: str
+    project_id: str
+    provider_id: str | None
+    model: str | None
+    status: str
+    system_prompt: str | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class AiMessageCreate(BaseModel):
+    content: str = Field(min_length=1, max_length=100_000)
+    chapter_id: str | None = None
+    selected_text: str | None = None
+    idempotency_key: str | None = Field(default=None, max_length=200)
+
+
+class AiMessageAccepted(BaseModel):
+    message_id: str
+    session_id: str
+    status: str
+
+
+class AiMessageRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: str
+    session_id: str
+    role: str
+    content: str
+    status: str
+    prompt_tokens: int | None
+    completion_tokens: int | None
+    created_at: datetime
+    completed_at: datetime | None
+
+
+class AiEventRead(BaseModel):
+    id: int
+    session_id: str
+    type: str
+    data: dict[str, Any]
+    created_at: datetime

@@ -182,3 +182,78 @@ class Operation(Base):
         DateTime(timezone=True), default=utcnow, nullable=False
     )
     applied_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class Provider(Base):
+    __tablename__ = "providers"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    kind: Mapped[str] = mapped_column(String(40), default="openai_compatible", nullable=False)
+    base_url: Mapped[str] = mapped_column(String(500), nullable=False)
+    model: Mapped[str] = mapped_column(String(200), nullable=False)
+    api_key_encrypted: Mapped[str | None] = mapped_column(Text)
+    enabled: Mapped[bool] = mapped_column(default=True, nullable=False)
+    timeout_seconds: Mapped[int] = mapped_column(Integer, default=90, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
+    )
+
+
+class AiSession(Base):
+    __tablename__ = "ai_sessions"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    project_id: Mapped[str] = mapped_column(
+        ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    provider_id: Mapped[str | None] = mapped_column(
+        ForeignKey("providers.id", ondelete="SET NULL"), index=True
+    )
+    model: Mapped[str | None] = mapped_column(String(200))
+    status: Mapped[str] = mapped_column(String(30), default="idle", nullable=False, index=True)
+    system_prompt: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
+    )
+
+
+class AiMessage(Base):
+    __tablename__ = "ai_messages"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    session_id: Mapped[str] = mapped_column(
+        ForeignKey("ai_sessions.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    role: Mapped[str] = mapped_column(String(20), nullable=False)
+    content: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    status: Mapped[str] = mapped_column(String(30), default="pending", nullable=False)
+    idempotency_key: Mapped[str | None] = mapped_column(String(200), unique=True)
+    prompt_tokens: Mapped[int | None] = mapped_column(Integer)
+    completion_tokens: Mapped[int | None] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, nullable=False
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class AiEvent(Base):
+    __tablename__ = "ai_events"
+    __table_args__ = (UniqueConstraint("session_id", "sequence", name="uq_ai_event_sequence"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    session_id: Mapped[str] = mapped_column(
+        ForeignKey("ai_sessions.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    sequence: Mapped[int] = mapped_column(Integer, nullable=False)
+    event_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    data: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, nullable=False
+    )

@@ -22,5 +22,7 @@ service is available again.
 - Local draft autosave with offline status and manual version save through operation approval.
 - Word count, writing/outline mode controls, revision timeline, and assistant quick actions.
 - Responsive narrow-window layout for development and later Tauri WebView embedding.
+- Real Provider/SSE assistant path for non-demo projects, including streaming deltas, cancel,
+  reconnect cursor, and operation approval; demo projects keep the local fallback.
 
 Build a production bundle with `npm run build`; output is written to `frontend/dist/`.
