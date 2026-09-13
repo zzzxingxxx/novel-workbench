@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.db.session import SessionLocal
 from app.models.domain import AiEvent, AiMessage, AiSession, Chapter, Provider, new_id
+from app.services.context import build_context_package, context_text
 from app.services.prompts import build_prompt
 
 
@@ -210,6 +211,7 @@ def create_message(
     chapter_id: str | None,
     selected_text: str | None,
     idempotency_key: str | None,
+    context_budget: int = 6000,
 ) -> tuple[AiMessage, bool]:
     if idempotency_key:
         existing = db.scalar(select(AiMessage).where(AiMessage.idempotency_key == idempotency_key))
@@ -239,6 +241,7 @@ def create_message(
         content=content,
         status="queued",
         idempotency_key=idempotency_key,
+        context_budget=context_budget,
     )
     db.add(message)
     db.commit()
@@ -291,11 +294,19 @@ async def run_message(
                 "prompt_digest": session.prompt_digest,
             },
         )
-        context_text = ""
-        if chapter_id:
-            chapter = db.get(Chapter, chapter_id)
-            if chapter and chapter.volume.project_id == session.project_id:
-                context_text = chapter.content
+        package = build_context_package(
+            db,
+            project_id=session.project_id,
+            user_instruction=message.content,
+            chapter_id=chapter_id,
+            selected_text=selected_text,
+            system_prompt=session.system_prompt,
+            budget_tokens=message.context_budget,
+        )
+        message.context_package = package
+        message.context_digest = package["digest"]
+        message.context_tokens = package["used_tokens"]
+        db.commit()
         append_event(
             db,
             session_id,
@@ -303,14 +314,14 @@ async def run_message(
             {
                 "chapter_id": chapter_id,
                 "selected_text": selected_text,
-                "characters": len(context_text),
+                "digest": package["digest"],
+                "used_tokens": package["used_tokens"],
+                "budget_tokens": package["budget_tokens"],
+                "truncated_count": package["truncated_count"],
+                "fragment_count": len(package["fragments"]),
             },
         )
-        prompt = message.content
-        if selected_text:
-            prompt += f"\n\n[选区]\n{selected_text}"
-        if context_text:
-            prompt += f"\n\n[当前章节]\n{context_text}"
+        prompt = context_text(package)
         messages: list[dict[str, str]] = []
         if session.system_prompt:
             messages.append({"role": "system", "content": session.system_prompt})

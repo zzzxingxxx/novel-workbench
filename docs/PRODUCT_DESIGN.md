@@ -405,6 +405,14 @@ GET    /api/v1/prompts
 GET    /api/v1/prompts/{id}/versions
 POST   /api/v1/prompts/{id}/versions
 POST   /api/v1/prompts/preview
+POST   /api/v1/context/build
+GET    /api/v1/ai/sessions/{id}/messages/{message_id}/context
+POST   /api/v1/tools/read_chapter
+POST   /api/v1/tools/search_project
+POST   /api/v1/tools/read_entity
+POST   /api/v1/tools/create_note
+POST   /api/v1/tools/propose_text_operation
+POST   /api/v1/tools/update_entity
 POST   /api/v1/ai/sessions
 POST   /api/v1/ai/sessions/{id}/messages
 GET    /api/v1/ai/sessions/{id}/events

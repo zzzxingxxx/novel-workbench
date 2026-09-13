@@ -304,6 +304,19 @@ CI 首先只做：安装、格式检查、类型检查、单元测试、前端�
 - 工具错误会被模型和用户清楚看到。
 - AI 只能生成 operation preview，不能绕过服务层直接改正文。
 
+### 9.4 阶段 5 实现状态（上下文与基础工具）
+
+阶段 5 已完成可审计上下文和首批工具闭环：
+
+- 新增 `ContextPackage` 构建服务，固定优先级为用户指令 → 当前选区/章节 → 项目规则 → 项目摘要 → 实体 → 资料笔记；每个片段记录来源、来源 ID、优先级、token 数、是否可截断、截断状态和原因；
+- 支持 256～20,000 token 预算，低优先级片段按预算截断或省略，保存 `used_tokens`、`truncated_count` 和 SHA-256 digest；
+- `POST /api/v1/context/build` 支持调用前预览，AI 消息保存完整 `context_package`、digest、token 和预算；通过消息 context 接口可复盘“AI 看到了什么”；
+- AI 调用使用消息创建时冻结的 ContextPackage，`context.ready` SSE 事件包含 digest、预算、截断数和片段数；
+- 新增 `read_chapter`、`search_project`、`read_entity`、`create_note`、`propose_text_operation`、`update_entity` 六个工具，统一返回 `success`、`error_code`、`message`、`source_ids` 和 `data`；
+- 所有工具强制校验项目边界；文本和实体写入只生成待审批 Operation，实体更新支持审批后执行，不允许工具绕过服务直接修改正文；
+- React 助手在收到上下文事件后展示 ContextPackage 抽屉，可展开片段、来源和 token，并显示预算与截断情况；
+- 新增迁移 `0004_context_tools`，覆盖上下文预算、优先级、项目隔离、工具错误、审批安全和消息快照测试。
+
 ## 10. FTS5 检索与引用（第 8 周）
 
 ### 10.1 实现顺序

@@ -295,6 +295,10 @@ class AiMessage(Base):
     idempotency_key: Mapped[str | None] = mapped_column(String(200), unique=True)
     prompt_tokens: Mapped[int | None] = mapped_column(Integer)
     completion_tokens: Mapped[int | None] = mapped_column(Integer)
+    context_package: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
+    context_digest: Mapped[str | None] = mapped_column(String(64), index=True)
+    context_tokens: Mapped[int | None] = mapped_column(Integer)
+    context_budget: Mapped[int] = mapped_column(Integer, default=6000, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, nullable=False
     )

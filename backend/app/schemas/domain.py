@@ -112,9 +112,9 @@ class NotePatch(BaseModel):
 
 class OperationCreate(BaseModel):
     project_id: str
-    target_type: Literal["chapter"] = "chapter"
+    target_type: Literal["chapter", "entity"] = "chapter"
     target_id: str
-    type: Literal["replace_range", "append", "restore_revision"]
+    type: Literal["replace_range", "append", "restore_revision", "update_entity"]
     payload: dict[str, Any] = Field(default_factory=dict)
     old_hash: str | None = None
     source: Literal["user", "ai"] = "user"
@@ -291,7 +291,7 @@ class PromptPreviewSection(BaseModel):
 
 
 class PromptPreviewRead(BaseModel):
-    prompt: str
+    prompt: str | None
     version_ids: list[str]
     sections: list[PromptPreviewSection]
     estimated_tokens: int
@@ -331,6 +331,7 @@ class AiMessageCreate(BaseModel):
     chapter_id: str | None = None
     selected_text: str | None = None
     idempotency_key: str | None = Field(default=None, max_length=200)
+    context_budget: int = Field(default=6000, ge=256, le=20_000)
 
 
 class AiMessageAccepted(BaseModel):
@@ -348,6 +349,10 @@ class AiMessageRead(BaseModel):
     status: str
     prompt_tokens: int | None
     completion_tokens: int | None
+    context_package: dict[str, Any]
+    context_digest: str | None
+    context_tokens: int | None
+    context_budget: int
     created_at: datetime
     completed_at: datetime | None
 
@@ -358,3 +363,57 @@ class AiEventRead(BaseModel):
     type: str
     data: dict[str, Any]
     created_at: datetime
+
+
+class ToolResult(BaseModel):
+    success: bool
+    error_code: str | None = None
+    message: str | None = None
+    source_ids: list[str] = Field(default_factory=list)
+    data: dict[str, Any] = Field(default_factory=dict)
+
+
+class ReadChapterToolRequest(BaseModel):
+    project_id: str
+    chapter_id: str
+
+
+class SearchProjectToolRequest(BaseModel):
+    project_id: str
+    query: str = Field(min_length=1, max_length=500)
+    limit: int = Field(default=10, ge=1, le=50)
+
+
+class ReadEntityToolRequest(BaseModel):
+    project_id: str
+    entity_id: str
+
+
+class CreateNoteToolRequest(BaseModel):
+    project_id: str
+    title: str = Field(min_length=1, max_length=200)
+    content: str = Field(default="", max_length=100_000)
+    tags: list[str] = Field(default_factory=list)
+
+
+class ProposeTextOperationToolRequest(BaseModel):
+    project_id: str
+    chapter_id: str
+    type: Literal["append", "replace_range"]
+    payload: dict[str, Any] = Field(default_factory=dict)
+    old_hash: str | None = None
+
+
+class UpdateEntityToolRequest(BaseModel):
+    project_id: str
+    entity_id: str
+    changes: dict[str, Any] = Field(min_length=1)
+
+
+class ContextBuildRequest(BaseModel):
+    project_id: str
+    user_instruction: str | None = None
+    chapter_id: str | None = None
+    selected_text: str | None = None
+    session_id: str | None = None
+    budget_tokens: int = Field(default=6000, ge=256, le=20_000)

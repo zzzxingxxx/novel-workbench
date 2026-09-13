@@ -82,3 +82,19 @@ variables are accepted: `project.name`, `project.description`, `chapter.title`,
 Creating an AI session renders and freezes the prompt. `AiSessionRead` exposes the final prompt,
 the selected version IDs, section snapshot, variables, and digest, so later template changes do
 not alter historical calls. API keys and secret-like fields are rejected from prompt content.
+
+## Stage 5 context and tools
+
+Every AI message now builds and stores an auditable `ContextPackage`. Its default priority is
+user instruction, selected text, current chapter, project rules, project summary, entities, and
+notes. The package records source IDs, priority, token count, truncation flags, budget, used token
+count, and a SHA-256 digest. `POST /api/v1/context/build` previews the package before a call;
+`GET /api/v1/ai/sessions/{session_id}/messages/{message_id}/context` reads the frozen package.
+Message requests accept `context_budget` from 256 to 20,000 tokens. Lower-priority truncatable
+fragments are shortened or omitted when the budget is exceeded, while the package reports why.
+
+The first tool set is available under `/api/v1/tools`: `read_chapter`, `search_project`,
+`read_entity`, `create_note`, `propose_text_operation`, and `update_entity`. All responses use
+`success`, `error_code`, `message`, `source_ids`, and `data`. Project ownership is checked for
+every tool. Text and entity changes create pending operations and require the existing approve
+endpoint; tools never write chapter text or entity fields directly.

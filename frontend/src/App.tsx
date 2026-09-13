@@ -105,6 +105,8 @@ function App() {
   const eventSourceRef = useRef<EventSource | null>(null)
   const [selectedText, setSelectedText] = useState('')
   const [pendingOperationId, setPendingOperationId] = useState<string | null>(null)
+  const [contextExpanded, setContextExpanded] = useState(false)
+  const [contextPackage, setContextPackage] = useState<{ used_tokens: number; budget_tokens: number; truncated_count: number; fragments: Array<{ title: string; source: string; token_count: number; content: string; truncated: boolean }> } | null>(null)
   const [promptOpen, setPromptOpen] = useState(false)
   const [promptTemplates, setPromptTemplates] = useState<PromptTemplate[]>([])
   const [promptSelected, setPromptSelected] = useState<PromptTemplate | null>(null)
@@ -394,6 +396,11 @@ function App() {
           return next
         })
       })
+      stream.addEventListener('context.ready', () => {
+        void api<{ package: typeof contextPackage }>(`/api/v1/ai/sessions/${sessionId}/messages/${response.message_id}/context`)
+          .then((result) => setContextPackage(result.package))
+          .catch(() => undefined)
+      })
       stream.addEventListener('assistant.operation_preview', (event) => {
         const payload = JSON.parse((event as MessageEvent).data) as { data: { operation_id: string } }
         setPendingOperationId(payload.data.operation_id)
@@ -460,7 +467,7 @@ function App() {
         <aside className="sidebar right-sidebar">
           <div className="assistant-head"><div className="tab-switch"><button className={assistantTab === 'assistant' ? 'active' : ''} onClick={() => setAssistantTab('assistant')}><Sparkles size={15} />助手</button><button className={assistantTab === 'history' ? 'active' : ''} onClick={() => setAssistantTab('history')}><Clock3 size={15} />版本</button></div><button className="icon-button subtle" title="收起侧栏"><PanelRight size={17} /></button></div>
           {assistantTab === 'assistant' ? <>
-            <div className="assistant-context"><div className="context-label">当前上下文</div><div className="context-row"><span className="context-icon"><BookOpen size={14} /></span><span>第 1 章 · 全文</span><span className="context-meta">{wordCount} 字</span></div><div className="context-row"><span className="context-icon violet"><Sparkles size={14} /></span><span>潮汐之上 · 写作规则</span><span className="context-meta">已加载</span></div></div>
+            <div className="assistant-context"><div className="context-label">当前上下文</div><div className="context-row"><span className="context-icon"><BookOpen size={14} /></span><span>第 1 章 · 全文</span><span className="context-meta">{wordCount} 字</span></div><div className="context-row"><span className="context-icon violet"><Sparkles size={14} /></span><span>潮汐之上 · 写作规则</span><span className="context-meta">已加载</span></div>{contextPackage && <><button className="context-inspect" onClick={() => setContextExpanded((value) => !value)}><span>{contextExpanded ? '收起 ContextPackage' : '查看 ContextPackage'}</span><ChevronDown size={13} style={{ transform: contextExpanded ? 'rotate(180deg)' : undefined }} /></button>{contextExpanded && <div className="context-package"><div className="context-package-meta">{contextPackage.used_tokens}/{contextPackage.budget_tokens} tokens · 截断 {contextPackage.truncated_count} 段</div>{contextPackage.fragments.map((fragment) => <details key={`${fragment.source}-${fragment.title}`} open><summary>{fragment.title}<span>{fragment.token_count} tokens</span></summary><p>{fragment.content}</p></details>)}</div>}</>}</div>
             <div className="assistant-log">{assistantLog.map((line, index) => <div key={`${line}-${index}`} className={line.startsWith('你：') ? 'user-line' : line.startsWith('建议：') ? 'suggestion-line' : 'assistant-line'}>{line.startsWith('建议：') && <Sparkles size={14} />}{line}</div>)}</div>
             {pendingOperationId && <div className="operation-approval"><div><Sparkles size={14} /><span>AI 已生成一条正文修改建议</span></div><button onClick={() => void approvePendingOperation()}>审批写入</button></div>}
             <div className="quick-prompts"><span>快速操作</span><div><button onClick={() => setAssistantInput('续写这一段，保持克制的悬疑感')}><Play size={13} />续写</button><button onClick={() => setAssistantInput('把这段改得更有画面感')}><WandSparkles size={13} />改写</button><button onClick={() => setAssistantInput('检查人物动机和时间线')}><Search size={13} />检查</button></div></div>

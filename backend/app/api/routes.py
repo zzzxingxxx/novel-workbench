@@ -41,6 +41,8 @@ from app.schemas.domain import (
     ChapterPage,
     ChapterPatch,
     ChapterRead,
+    ContextBuildRequest,
+    CreateNoteToolRequest,
     EntityCreate,
     EntityPage,
     EntityPatch,
@@ -63,10 +65,16 @@ from app.schemas.domain import (
     PromptTemplateRead,
     PromptVersionCreate,
     PromptVersionRead,
+    ProposeTextOperationToolRequest,
     ProviderCreate,
     ProviderPatch,
     ProviderRead,
+    ReadChapterToolRequest,
+    ReadEntityToolRequest,
     RevisionRead,
+    SearchProjectToolRequest,
+    ToolResult,
+    UpdateEntityToolRequest,
     VolumeCreate,
     VolumePage,
     VolumePatch,
@@ -79,6 +87,15 @@ from app.services.ai import (
     encrypt_api_key,
     provider_for,
     session_or_404,
+)
+from app.services.context import (
+    build_context_package,
+    tool_create_note,
+    tool_propose_operation,
+    tool_read_chapter,
+    tool_read_entity,
+    tool_search_project,
+    tool_update_entity,
 )
 from app.services.domain import (
     approve_operation,
@@ -176,8 +193,7 @@ def list_prompt_templates(
     )
     if project_id:
         query = query.where(
-            (PromptTemplate.project_id == project_id)
-            | (PromptTemplate.project_id.is_(None))
+            (PromptTemplate.project_id == project_id) | (PromptTemplate.project_id.is_(None))
         )
     if scope:
         query = query.where(PromptTemplate.scope == scope)
@@ -463,6 +479,62 @@ async def test_provider(provider_id: str, db: Session = Depends(get_db)):
         ) from exc
 
 
+@router.post("/context/build")
+def build_context(data: ContextBuildRequest, db: Session = Depends(get_db)):
+    session_prompt = None
+    if data.session_id:
+        session = session_or_404(db, data.session_id)
+        if session.project_id != data.project_id:
+            raise HTTPException(
+                400,
+                detail={"code": "invalid_session", "message": "session does not belong to project"},
+            )
+        session_prompt = session.system_prompt
+    return build_context_package(
+        db,
+        project_id=data.project_id,
+        user_instruction=data.user_instruction,
+        chapter_id=data.chapter_id,
+        selected_text=data.selected_text,
+        system_prompt=session_prompt,
+        budget_tokens=data.budget_tokens,
+    )
+
+
+@router.post("/tools/read_chapter", response_model=ToolResult)
+def tool_read_chapter_route(data: ReadChapterToolRequest, db: Session = Depends(get_db)):
+    return tool_read_chapter(db, data.project_id, data.chapter_id)
+
+
+@router.post("/tools/search_project", response_model=ToolResult)
+def tool_search_project_route(data: SearchProjectToolRequest, db: Session = Depends(get_db)):
+    return tool_search_project(db, data.project_id, data.query, data.limit)
+
+
+@router.post("/tools/read_entity", response_model=ToolResult)
+def tool_read_entity_route(data: ReadEntityToolRequest, db: Session = Depends(get_db)):
+    return tool_read_entity(db, data.project_id, data.entity_id)
+
+
+@router.post("/tools/create_note", response_model=ToolResult)
+def tool_create_note_route(data: CreateNoteToolRequest, db: Session = Depends(get_db)):
+    return tool_create_note(db, data.project_id, data.title, data.content, data.tags)
+
+
+@router.post("/tools/propose_text_operation", response_model=ToolResult)
+def tool_propose_text_operation_route(
+    data: ProposeTextOperationToolRequest, db: Session = Depends(get_db)
+):
+    return tool_propose_operation(
+        db, data.project_id, data.chapter_id, data.type, data.payload, data.old_hash
+    )
+
+
+@router.post("/tools/update_entity", response_model=ToolResult)
+def tool_update_entity_route(data: UpdateEntityToolRequest, db: Session = Depends(get_db)):
+    return tool_update_entity(db, data.project_id, data.entity_id, data.changes)
+
+
 @router.post("/ai/sessions", response_model=AiSessionRead, status_code=status.HTTP_201_CREATED)
 def create_ai_session(data: AiSessionCreate, db: Session = Depends(get_db)):
     return create_session(
@@ -502,13 +574,37 @@ def list_ai_messages(session_id: str, db: Session = Depends(get_db)):
 async def create_ai_message(session_id: str, data: AiMessageCreate, db: Session = Depends(get_db)):
     session = session_or_404(db, session_id)
     message, created = create_message(
-        db, session, data.content, data.chapter_id, data.selected_text, data.idempotency_key
+        db,
+        session,
+        data.content,
+        data.chapter_id,
+        data.selected_text,
+        data.idempotency_key,
+        data.context_budget,
     )
     if created:
         from app.services.ai import schedule_message
 
         schedule_message(session.id, message.id, data.chapter_id, data.selected_text)
     return {"message_id": message.id, "session_id": session.id, "status": message.status}
+
+
+@router.get("/ai/sessions/{session_id}/messages/{message_id}/context")
+def read_message_context(session_id: str, message_id: str, db: Session = Depends(get_db)):
+    session_or_404(db, session_id)
+    message = db.get(AiMessage, message_id)
+    if not message or message.session_id != session_id:
+        raise HTTPException(
+            404, detail={"code": "message_not_found", "message": "message not found"}
+        )
+    return {
+        "message_id": message.id,
+        "session_id": session_id,
+        "package": message.context_package,
+        "digest": message.context_digest,
+        "used_tokens": message.context_tokens,
+        "budget_tokens": message.context_budget,
+    }
 
 
 @router.get("/ai/sessions/{session_id}/events")

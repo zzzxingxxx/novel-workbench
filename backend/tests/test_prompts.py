@@ -90,13 +90,19 @@ def test_prompt_scopes_order_disable_and_project_isolation(client):
         "workflow",
     ]
     assert preview.json()["prompt"].index("G") < preview.json()["prompt"].index("P")
-    assert "P" not in client.post(
-        "/api/v1/prompts/preview", json={"project_id": project_b["id"]}
-    ).json()["prompt"]
+    assert (
+        "P"
+        not in client.post("/api/v1/prompts/preview", json={"project_id": project_b["id"]}).json()[
+            "prompt"
+        ]
+    )
     client.patch(f"/api/v1/prompts/{global_prompt['id']}", json={"enabled": False})
-    assert "G" not in client.post(
-        "/api/v1/prompts/preview", json={"project_id": project_a["id"]}
-    ).json()["prompt"]
+    assert (
+        "G"
+        not in client.post("/api/v1/prompts/preview", json={"project_id": project_a["id"]}).json()[
+            "prompt"
+        ]
+    )
 
 
 def test_prompt_validation_and_session_snapshot(client):

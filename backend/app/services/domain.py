@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.models.domain import (
     Chapter,
+    Entity,
     Operation,
     Project,
     Revision,
@@ -43,6 +44,22 @@ def get_chapter(db: Session, chapter_id: str) -> Chapter:
 
 
 def validate_operation_payload(db: Session, chapter: Chapter, data: OperationCreate) -> None:
+    if data.target_type == "entity" and data.type != "update_entity":
+        raise HTTPException(
+            422,
+            detail={
+                "code": "invalid_operation",
+                "message": "entity operations must use update_entity",
+            },
+        )
+    if data.target_type == "chapter" and data.type == "update_entity":
+        raise HTTPException(
+            422,
+            detail={
+                "code": "invalid_operation",
+                "message": "update_entity requires an entity target",
+            },
+        )
     payload = data.payload
     if data.type == "append":
         if not isinstance(payload.get("new_text"), str):
@@ -76,6 +93,21 @@ def validate_operation_payload(db: Session, chapter: Chapter, data: OperationCre
                     "code": "invalid_operation",
                     "message": "revision does not belong to chapter",
                 },
+            )
+    elif data.type == "update_entity":
+        if data.target_type != "entity":
+            raise HTTPException(
+                422,
+                detail={"code": "invalid_operation", "message": "update_entity targets an entity"},
+            )
+        entity = db.get(Entity, data.target_id)
+        if (
+            not entity
+            or entity.project_id != data.project_id
+            or not isinstance(data.payload.get("changes"), dict)
+        ):
+            raise HTTPException(
+                422, detail={"code": "invalid_operation", "message": "entity changes are invalid"}
             )
 
 
@@ -120,10 +152,17 @@ def create_operation(db: Session, data: OperationCreate) -> Operation:
                 )
             return existing
     get_project(db, data.project_id)
-    chapter = get_chapter(db, data.target_id)
-    if chapter.volume.project_id != data.project_id:
-        raise HTTPException(status_code=400, detail="target does not belong to project")
-    validate_operation_payload(db, chapter, data)
+    chapter = None
+    if data.target_type == "chapter":
+        chapter = get_chapter(db, data.target_id)
+        if chapter.volume.project_id != data.project_id:
+            raise HTTPException(status_code=400, detail="target does not belong to project")
+        validate_operation_payload(db, chapter, data)
+    else:
+        entity = db.get(Entity, data.target_id)
+        if not entity or entity.project_id != data.project_id:
+            raise HTTPException(status_code=400, detail="target does not belong to project")
+        validate_operation_payload(db, chapter, data)
     operation = Operation(
         project_id=data.project_id,
         target_type=data.target_type,
@@ -134,7 +173,8 @@ def create_operation(db: Session, data: OperationCreate) -> Operation:
         source=data.source,
         idempotency_key=data.idempotency_key,
     )
-    if data.old_hash is not None and data.old_hash != chapter.content_hash:
+    current_hash = chapter.content_hash if chapter is not None else None
+    if data.old_hash is not None and data.old_hash != current_hash:
         operation.status = "conflict"
     db.add(operation)
     db.commit()
@@ -144,7 +184,7 @@ def create_operation(db: Session, data: OperationCreate) -> Operation:
             status_code=status.HTTP_409_CONFLICT,
             detail={
                 "code": "content_conflict",
-                "current_hash": chapter.content_hash,
+                "current_hash": current_hash,
                 "operation_id": operation.id,
             },
         )
@@ -156,6 +196,24 @@ def approve_operation(db: Session, operation_id: str) -> Operation:
     if not operation:
         raise _not_found("operation")
     if operation.status != "pending":
+        return operation
+    if operation.target_type == "entity":
+        entity = db.get(Entity, operation.target_id)
+        if not entity or entity.project_id != operation.project_id:
+            operation.status = "conflict"
+            db.commit()
+            raise HTTPException(
+                status_code=409, detail={"code": "content_conflict", "operation_id": operation.id}
+            )
+        if operation.type == "update_entity":
+            changes = operation.payload.get("changes", {})
+            for key in ("name", "description", "aliases", "attributes", "status"):
+                if key in changes:
+                    setattr(entity, key, changes[key])
+        operation.status = "applied"
+        operation.applied_at = datetime.now(timezone.utc)
+        db.commit()
+        db.refresh(operation)
         return operation
     chapter = get_chapter(db, operation.target_id)
     if operation.old_hash is not None and operation.old_hash != chapter.content_hash:
