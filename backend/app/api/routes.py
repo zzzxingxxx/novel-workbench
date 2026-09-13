@@ -72,6 +72,7 @@ from app.schemas.domain import (
     ReadChapterToolRequest,
     ReadEntityToolRequest,
     RevisionRead,
+    SearchProjectRequest,
     SearchProjectToolRequest,
     ToolResult,
     UpdateEntityToolRequest,
@@ -107,6 +108,7 @@ from app.services.domain import (
 )
 from app.services.domain import create_operation as create_operation_service
 from app.services.prompts import build_prompt, validate_prompt
+from app.services.search import rebuild_project_index, search_project
 from app.services.transfer import decode_import_bytes, export_json, export_zip, import_project
 
 router = APIRouter(prefix="/api/v1")
@@ -496,9 +498,30 @@ def build_context(data: ContextBuildRequest, db: Session = Depends(get_db)):
         user_instruction=data.user_instruction,
         chapter_id=data.chapter_id,
         selected_text=data.selected_text,
+        search_query=data.search_query,
+        search_limit=data.search_limit,
         system_prompt=session_prompt,
         budget_tokens=data.budget_tokens,
     )
+
+
+@router.post("/search", response_model=dict[str, object])
+def search_route(data: SearchProjectRequest, db: Session = Depends(get_db)):
+    get_project(db, data.project_id)
+    return search_project(
+        db,
+        data.project_id,
+        data.query,
+        data.limit,
+        data.source_type,
+        data.volume_id,
+    )
+
+
+@router.post("/projects/{project_id}/search/reindex")
+def reindex_project_route(project_id: str, db: Session = Depends(get_db)):
+    get_project(db, project_id)
+    return {"ok": True, "index_version": "fts5-v1", **rebuild_project_index(db, project_id)}
 
 
 @router.post("/tools/read_chapter", response_model=ToolResult)
@@ -581,6 +604,8 @@ async def create_ai_message(session_id: str, data: AiMessageCreate, db: Session 
         data.selected_text,
         data.idempotency_key,
         data.context_budget,
+        data.search_query,
+        data.search_limit,
     )
     if created:
         from app.services.ai import schedule_message

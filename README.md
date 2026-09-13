@@ -98,3 +98,18 @@ The first tool set is available under `/api/v1/tools`: `read_chapter`, `search_p
 `success`, `error_code`, `message`, `source_ids`, and `data`. Project ownership is checked for
 every tool. Text and entity changes create pending operations and require the existing approve
 endpoint; tools never write chapter text or entity fields directly.
+
+## Stage 6 FTS5 search and citations
+
+The project search endpoint is `POST /api/v1/search`. It indexes chapters, entities, and notes
+in SQLite FTS5 and uses an application-side Chinese character n-gram fallback. Search requests
+are scoped by `project_id` and can optionally filter by `source_type` (`chapter`, `entity`, or
+`note`) and `volume_id`. Results include highlighted snippets, score, source IDs, chapter/volume
+IDs, paragraph position when available, and `index_version` for citation replay.
+
+Use `POST /api/v1/projects/{project_id}/search/reindex` to rebuild a project index explicitly.
+The existing `search_project` tool uses the same service and response shape. AI message requests
+may include `search_query` and `search_limit`; matching snippets are added to the ContextPackage
+as low-priority, traceable `search_result` fragments. `0005_fts5_search` creates the FTS5 table
+and records the retrieval query on each AI message. A per-project source stamp avoids rebuilding
+the index when chapters, entities, and notes have not changed.

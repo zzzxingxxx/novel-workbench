@@ -212,6 +212,8 @@ def create_message(
     selected_text: str | None,
     idempotency_key: str | None,
     context_budget: int = 6000,
+    search_query: str | None = None,
+    search_limit: int = 8,
 ) -> tuple[AiMessage, bool]:
     if idempotency_key:
         existing = db.scalar(select(AiMessage).where(AiMessage.idempotency_key == idempotency_key))
@@ -242,6 +244,8 @@ def create_message(
         status="queued",
         idempotency_key=idempotency_key,
         context_budget=context_budget,
+        retrieval_query=search_query,
+        retrieval_limit=search_limit,
     )
     db.add(message)
     db.commit()
@@ -300,6 +304,8 @@ async def run_message(
             user_instruction=message.content,
             chapter_id=chapter_id,
             selected_text=selected_text,
+            search_query=message.retrieval_query,
+            search_limit=message.retrieval_limit,
             system_prompt=session.system_prompt,
             budget_tokens=message.context_budget,
         )

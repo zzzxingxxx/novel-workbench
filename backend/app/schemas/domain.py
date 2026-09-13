@@ -332,6 +332,8 @@ class AiMessageCreate(BaseModel):
     selected_text: str | None = None
     idempotency_key: str | None = Field(default=None, max_length=200)
     context_budget: int = Field(default=6000, ge=256, le=20_000)
+    search_query: str | None = Field(default=None, max_length=500)
+    search_limit: int = Field(default=8, ge=1, le=30)
 
 
 class AiMessageAccepted(BaseModel):
@@ -353,6 +355,8 @@ class AiMessageRead(BaseModel):
     context_digest: str | None
     context_tokens: int | None
     context_budget: int
+    retrieval_query: str | None
+    retrieval_limit: int
     created_at: datetime
     completed_at: datetime | None
 
@@ -415,5 +419,15 @@ class ContextBuildRequest(BaseModel):
     user_instruction: str | None = None
     chapter_id: str | None = None
     selected_text: str | None = None
+    search_query: str | None = Field(default=None, max_length=500)
+    search_limit: int = Field(default=8, ge=1, le=30)
     session_id: str | None = None
     budget_tokens: int = Field(default=6000, ge=256, le=20_000)
+
+
+class SearchProjectRequest(BaseModel):
+    project_id: str
+    query: str = Field(min_length=1, max_length=500)
+    limit: int = Field(default=20, ge=1, le=100)
+    source_type: Literal["chapter", "entity", "note"] | None = None
+    volume_id: str | None = None

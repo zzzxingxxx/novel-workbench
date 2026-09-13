@@ -299,6 +299,8 @@ class AiMessage(Base):
     context_digest: Mapped[str | None] = mapped_column(String(64), index=True)
     context_tokens: Mapped[int | None] = mapped_column(Integer)
     context_budget: Mapped[int] = mapped_column(Integer, default=6000, nullable=False)
+    retrieval_query: Mapped[str | None] = mapped_column(String(500))
+    retrieval_limit: Mapped[int] = mapped_column(Integer, default=8, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, nullable=False
     )

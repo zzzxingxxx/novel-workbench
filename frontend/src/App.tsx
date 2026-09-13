@@ -47,6 +47,24 @@ type PromptTemplate = {
   enabled: boolean
   active_version_id: string | null
 }
+type SearchHit = {
+  source_type: 'chapter' | 'entity' | 'note'
+  source_id: string
+  title: string
+  snippet: string
+  highlight: string
+  score: number
+  chapter_id: string | null
+  volume_id: string | null
+  citation: { paragraph: number | null }
+}
+
+function renderSearchHighlight(value: string) {
+  return value.split(/(<mark>.*?<\/mark>)/gi).map((part, index) => {
+    const match = part.match(/^<mark>(.*?)<\/mark>$/i)
+    return match ? <mark key={index}>{match[1]}</mark> : <span key={index}>{part}</span>
+  })
+}
 
 const demoTree: TreeResponse = {
   project: { id: 'demo-project', name: '潮汐之上', description: '一部关于记忆、航海与重逢的长篇小说。', language: 'zh-CN' },
@@ -107,6 +125,10 @@ function App() {
   const [pendingOperationId, setPendingOperationId] = useState<string | null>(null)
   const [contextExpanded, setContextExpanded] = useState(false)
   const [contextPackage, setContextPackage] = useState<{ used_tokens: number; budget_tokens: number; truncated_count: number; fragments: Array<{ title: string; source: string; token_count: number; content: string; truncated: boolean }> } | null>(null)
+  const [searchOpen, setSearchOpen] = useState(false)
+  const [searchQuery, setSearchQuery] = useState('')
+  const [searchResults, setSearchResults] = useState<SearchHit[]>([])
+  const [searchBusy, setSearchBusy] = useState(false)
   const [promptOpen, setPromptOpen] = useState(false)
   const [promptTemplates, setPromptTemplates] = useState<PromptTemplate[]>([])
   const [promptSelected, setPromptSelected] = useState<PromptTemplate | null>(null)
@@ -234,6 +256,34 @@ function App() {
     } catch {
       setNotice('提示词服务暂不可用')
     }
+  }
+
+  const runSearch = async () => {
+    const query = searchQuery.trim()
+    if (!query) return
+    setSearchBusy(true)
+    try {
+      const result = await api<{ items: SearchHit[] }>('/api/v1/search', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ project_id: tree.project.id, query, limit: 30 }),
+      })
+      setSearchResults(result.items)
+    } catch {
+      setNotice('搜索暂不可用，请确认后端已启动')
+    } finally {
+      setSearchBusy(false)
+    }
+  }
+
+  const openSearchHit = async (hit: SearchHit) => {
+    if (hit.chapter_id) {
+      const chapter = tree.volumes.flatMap((volume) => volume.chapters).find((item) => item.id === hit.chapter_id)
+      if (chapter) await selectChapter(chapter)
+    } else {
+      setNotice(`${hit.source_type === 'entity' ? '实体' : '笔记'}：${hit.title}`)
+    }
+    setSearchOpen(false)
   }
 
   const selectPrompt = async (template: PromptTemplate) => {
@@ -429,7 +479,7 @@ function App() {
           <div className="crumbs"><span>{tree.project.name}</span><span className="crumb-slash">/</span><span className="active-crumb">{selectedChapter?.title ?? '选择章节'}</span></div>
         <div className="top-actions">
           <div className={`save-indicator ${saveState}`}><span className="status-dot" />{saveState === 'saved' ? '已保存' : saveState === 'saving' ? '保存中' : saveState === 'offline' ? '本地草稿' : '未保存'}</div>
-          <button className="icon-button" title="搜索"><Search size={17} /></button>
+          <button className="icon-button" title="搜索" onClick={() => setSearchOpen(true)}><Search size={17} /></button>
           <button className="icon-button" title="系统提示词" onClick={() => void openPromptManager()}><Settings2 size={17} /></button>
           <div className="avatar">LM</div>
         </div>
@@ -475,6 +525,7 @@ function App() {
           </> : <div className="history-panel"><div className="history-intro"><History size={17} /><div><strong>版本时间线</strong><p>每次审批都会生成一个可恢复版本。</p></div></div><div className="history-item current"><span className="history-dot" /><div><strong>当前草稿</strong><span>今天 04:17 · {wordCount} 字</span></div><MoreHorizontal size={15} /></div><div className="history-item"><span className="history-dot" /><div><strong>初始版本</strong><span>今天 03:52 · 1,280 字</span></div><MoreHorizontal size={15} /></div><button className="history-close" onClick={() => setAssistantTab('assistant')}><X size={14} />返回助手</button></div>}
         </aside>
       </div>
+      {searchOpen && <div className="search-overlay" role="dialog" aria-modal="true" aria-label="搜索作品"><div className="search-panel"><div className="search-panel-head"><div><span className="eyebrow">作品检索</span><h2>搜索作品</h2></div><button className="icon-button" title="关闭" onClick={() => setSearchOpen(false)}><X size={17} /></button></div><form className="search-form" onSubmit={(event) => { event.preventDefault(); void runSearch() }}><Search size={16} /><input autoFocus value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} placeholder="搜索章节、角色、笔记和标签" /><button className="send-button" disabled={searchBusy} title="执行搜索"><Search size={14} /></button></form><div className="search-results">{searchResults.length === 0 && <p className="prompt-empty">输入关键词搜索当前作品。</p>}{searchResults.map((hit) => <button className="search-result" key={`${hit.source_type}-${hit.source_id}`} onClick={() => void openSearchHit(hit)}><div className="search-result-head"><strong>{hit.title}</strong><span>{hit.source_type} · {hit.citation.paragraph ? `第 ${hit.citation.paragraph} 段` : '来源'}</span></div><div className="search-snippet">{renderSearchHighlight(hit.highlight || hit.snippet)}</div></button>)}</div></div></div>}
       {promptOpen && <div className="prompt-overlay" role="dialog" aria-modal="true" aria-label="系统提示词管理">
         <div className="prompt-panel">
           <div className="prompt-panel-head"><div><span className="eyebrow">AI 配置</span><h2>系统提示词</h2></div><button className="icon-button" title="关闭" onClick={() => setPromptOpen(false)}><X size={17} /></button></div>

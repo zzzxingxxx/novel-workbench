@@ -5,10 +5,10 @@ import json
 from typing import Any
 
 from fastapi import HTTPException
-from sqlalchemy import or_, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models.domain import Chapter, Entity, Note, Project, Volume
+from app.models.domain import Chapter, Entity, Note, Project
 
 
 def _tokens(value: str) -> int:
@@ -44,6 +44,8 @@ def build_context_package(
     user_instruction: str | None = None,
     chapter_id: str | None = None,
     selected_text: str | None = None,
+    search_query: str | None = None,
+    search_limit: int = 8,
     system_prompt: str | None = None,
     budget_tokens: int = 6000,
 ) -> dict[str, Any]:
@@ -159,6 +161,22 @@ def build_context_package(
             )
         )
 
+    if search_query:
+        from app.services.search import search_project
+
+        retrieval = search_project(db, project_id, search_query, limit=search_limit)
+        for hit in retrieval["items"]:
+            fragments.append(
+                _fragment(
+                    source="search_result",
+                    source_ids=[hit["source_id"]],
+                    priority=30,
+                    title=f"检索：{hit['title']}",
+                    content=hit["highlight"] or hit["snippet"],
+                    truncatable=True,
+                )
+            )
+
     fragments.sort(key=lambda item: (-item["priority"], item["title"], item["source_ids"]))
     remaining = budget_tokens
     included: list[dict[str, Any]] = []
@@ -239,40 +257,13 @@ def tool_read_chapter(db: Session, project_id: str, chapter_id: str) -> dict[str
 
 
 def tool_search_project(db: Session, project_id: str, query: str, limit: int) -> dict[str, Any]:
-    needle = f"%{query}%"
-    chapters = list(
-        db.scalars(
-            select(Chapter)
-            .join(Volume)
-            .where(
-                Volume.project_id == project_id,
-                or_(Chapter.title.ilike(needle), Chapter.content.ilike(needle)),
-            )
-            .limit(limit)
-        )
-    )
-    entities = list(
-        db.scalars(
-            select(Entity)
-            .where(
-                Entity.project_id == project_id,
-                or_(Entity.name.ilike(needle), Entity.description.ilike(needle)),
-            )
-            .limit(limit)
-        )
-    )
-    results = [
-        {"kind": "chapter", "id": item.id, "title": item.title, "snippet": item.content[:300]}
-        for item in chapters
-    ]
-    results.extend(
-        {"kind": "entity", "id": item.id, "title": item.name, "snippet": item.description[:300]}
-        for item in entities
-    )
+    from app.services.search import search_project
+
+    result = search_project(db, project_id, query, limit=limit)
     return {
         "success": True,
-        "source_ids": [item["id"] for item in results],
-        "data": {"query": query, "results": results[:limit]},
+        "source_ids": [item["source_id"] for item in result["items"]],
+        "data": result,
     }
 
 

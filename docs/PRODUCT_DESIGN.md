@@ -407,6 +407,8 @@ POST   /api/v1/prompts/{id}/versions
 POST   /api/v1/prompts/preview
 POST   /api/v1/context/build
 GET    /api/v1/ai/sessions/{id}/messages/{message_id}/context
+POST   /api/v1/search
+POST   /api/v1/projects/{id}/search/reindex
 POST   /api/v1/tools/read_chapter
 POST   /api/v1/tools/search_project
 POST   /api/v1/tools/read_entity
