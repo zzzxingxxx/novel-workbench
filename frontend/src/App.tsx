@@ -58,6 +58,10 @@ type SearchHit = {
   volume_id: string | null
   citation: { paragraph: number | null }
 }
+type LoreEntity = { id: string; name: string; kind: string; status: string; aliases: string[]; description: string; tags: string[] }
+type LoreTimeline = { id: string; title: string; absolute_time?: string | null; relative_order?: number | null; time_status: string }
+type LoreBranch = { id: string; name: string; status: string; trigger_condition: string }
+type LoreForeshadow = { id: string; title: string; status: string; description: string }
 
 function renderSearchHighlight(value: string) {
   return value.split(/(<mark>.*?<\/mark>)/gi).map((part, index) => {
@@ -135,12 +139,29 @@ function App() {
   const [promptDraft, setPromptDraft] = useState('')
   const [promptPreview, setPromptPreview] = useState('')
   const [promptBusy, setPromptBusy] = useState(false)
+  const [loreOpen, setLoreOpen] = useState(false)
+  const [loreTab, setLoreTab] = useState<'entities' | 'timeline' | 'branches' | 'foreshadows'>('entities')
+  const [loreData, setLoreData] = useState<{ entities: LoreEntity[]; timeline: LoreTimeline[]; branches: LoreBranch[]; foreshadows: LoreForeshadow[] }>({ entities: [], timeline: [], branches: [], foreshadows: [] })
 
   const selectedChapter = useMemo(
     () => tree.volumes.flatMap((volume) => volume.chapters).find((chapter) => chapter.id === selectedId),
     [tree, selectedId],
   )
   const wordCount = content.replace(/\s/g, '').length
+
+  const openLore = async () => {
+    setLoreOpen(true)
+    if (tree.project.id === 'demo-project') return
+    try {
+      const [entities, timeline, branches, foreshadows] = await Promise.all([
+        api<LoreEntity[]>(`/api/v1/projects/${tree.project.id}/entities`),
+        api<LoreTimeline[]>(`/api/v1/projects/${tree.project.id}/timeline`),
+        api<LoreBranch[]>(`/api/v1/projects/${tree.project.id}/branches`),
+        api<LoreForeshadow[]>(`/api/v1/projects/${tree.project.id}/foreshadows`),
+      ])
+      setLoreData({ entities, timeline, branches, foreshadows })
+    } catch { setNotice('资料库暂时不可用') }
+  }
 
   useEffect(() => {
     const load = async () => {
@@ -480,6 +501,7 @@ function App() {
         <div className="top-actions">
           <div className={`save-indicator ${saveState}`}><span className="status-dot" />{saveState === 'saved' ? '已保存' : saveState === 'saving' ? '保存中' : saveState === 'offline' ? '本地草稿' : '未保存'}</div>
           <button className="icon-button" title="搜索" onClick={() => setSearchOpen(true)}><Search size={17} /></button>
+          <button className="icon-button" title="资料库" onClick={() => void openLore()}><BookOpen size={17} /></button>
           <button className="icon-button" title="系统提示词" onClick={() => void openPromptManager()}><Settings2 size={17} /></button>
           <div className="avatar">LM</div>
         </div>
@@ -535,6 +557,7 @@ function App() {
           </div>
         </div>
       </div>}
+      {loreOpen && <div className="prompt-overlay" role="dialog" aria-modal="true" aria-label="资料库"><div className="prompt-panel lore-panel"><div className="prompt-panel-head"><div><span className="eyebrow">故事资料</span><h2>资料库</h2></div><button className="icon-button" title="关闭" onClick={() => setLoreOpen(false)}><X size={17} /></button></div><div className="lore-tabs">{([['entities', '实体'], ['timeline', '时间线'], ['branches', '分支'], ['foreshadows', '伏笔']] as const).map(([key, label]) => <button key={key} className={loreTab === key ? 'active' : ''} onClick={() => setLoreTab(key)}>{label}</button>)}</div><div className="lore-list">{loreTab === 'entities' && (loreData.entities.length ? loreData.entities.map((item) => <div className="lore-item" key={item.id}><strong>{item.name}</strong><span>{item.kind} · {item.status}</span><p>{item.description || '暂无描述'}{item.aliases?.length ? ` · 别名：${item.aliases.join('、')}` : ''}</p></div>) : <p className="prompt-empty">暂无实体。创建角色、地点或规则后会显示在这里。</p>)}{loreTab === 'timeline' && (loreData.timeline.length ? loreData.timeline.map((item) => <div className="lore-item" key={item.id}><strong>{item.title}</strong><span>{item.time_status} · {item.absolute_time || (item.relative_order == null ? '时间未知' : `顺序 ${item.relative_order}`)}</span></div>) : <p className="prompt-empty">暂无时间线事件。</p>)}{loreTab === 'branches' && (loreData.branches.length ? loreData.branches.map((item) => <div className="lore-item" key={item.id}><strong>{item.name}</strong><span>{item.status}</span><p>{item.trigger_condition || '未设置触发条件'}</p></div>) : <p className="prompt-empty">暂无剧情分支。</p>)}{loreTab === 'foreshadows' && (loreData.foreshadows.length ? loreData.foreshadows.map((item) => <div className="lore-item" key={item.id}><strong>{item.title}</strong><span>{item.status}</span><p>{item.description || '暂无描述'}</p></div>) : <p className="prompt-empty">暂无伏笔。</p>)}</div></div></div>}
       {notice && <button className="toast" onClick={() => setNotice('')}>{notice}<X size={14} /></button>}
       <button className="mobile-menu" title="菜单"><Menu size={18} /></button>
     </div>

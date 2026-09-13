@@ -71,6 +71,7 @@ class EntityCreate(BaseModel):
     aliases: list[str] = Field(default_factory=list)
     description: str = ""
     attributes: dict[str, Any] = Field(default_factory=dict)
+    tags: list[str] = Field(default_factory=list)
 
 
 class EntityRead(EntityCreate):
@@ -87,6 +88,7 @@ class EntityPatch(BaseModel):
     aliases: list[str] | None = None
     description: str | None = None
     attributes: dict[str, Any] | None = None
+    tags: list[str] | None = None
     status: str | None = Field(default=None, max_length=30)
 
 
@@ -112,13 +114,16 @@ class NotePatch(BaseModel):
 
 class OperationCreate(BaseModel):
     project_id: str
-    target_type: Literal["chapter", "entity"] = "chapter"
+    target_type: Literal["chapter", "entity", "foreshadow"] = "chapter"
     target_id: str
-    type: Literal["replace_range", "append", "restore_revision", "update_entity"]
+    type: Literal[
+        "replace_range", "append", "restore_revision", "update_entity", "update_foreshadow", "batch"
+    ]
     payload: dict[str, Any] = Field(default_factory=dict)
     old_hash: str | None = None
     source: Literal["user", "ai"] = "user"
     idempotency_key: str | None = Field(default=None, max_length=200)
+    permission: Literal["auto", "approval_required"] = "approval_required"
 
 
 class OperationRead(BaseModel):
@@ -135,6 +140,10 @@ class OperationRead(BaseModel):
     idempotency_key: str | None
     created_at: datetime
     applied_at: datetime | None
+    target_version_hash: str | None
+    diff: dict[str, Any]
+    permission: str
+    undo_operation_id: str | None
 
 
 class RevisionRead(BaseModel):
@@ -179,6 +188,145 @@ class EntityPage(BaseModel):
 class NotePage(BaseModel):
     items: list[NoteRead]
     meta: PageMeta
+
+
+class EntitySourceLinkCreate(BaseModel):
+    chapter_id: str
+    evidence: str = ""
+
+
+class EntitySourceLinkRead(EntitySourceLinkCreate):
+    model_config = ConfigDict(from_attributes=True)
+    id: str
+    project_id: str
+    entity_id: str
+    created_at: datetime
+
+
+class EntityRevisionRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: str
+    project_id: str
+    entity_id: str
+    snapshot: dict[str, Any]
+    source: str
+    operation_id: str | None
+    created_at: datetime
+
+
+class TimelineEventCreate(BaseModel):
+    title: str = Field(min_length=1, max_length=200)
+    description: str = ""
+    absolute_time: str | None = None
+    relative_order: int | None = None
+    time_status: Literal["absolute", "relative", "unknown"] = "unknown"
+    chapter_ids: list[str] = Field(default_factory=list)
+    entity_ids: list[str] = Field(default_factory=list)
+
+
+class TimelineEventRead(TimelineEventCreate):
+    model_config = ConfigDict(from_attributes=True)
+    id: str
+    project_id: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class StoryBranchCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    parent_id: str | None = None
+    trigger_condition: str = ""
+    chapter_ids: list[str] = Field(default_factory=list)
+    status: str = Field(default="active", max_length=30)
+
+
+class StoryBranchRead(StoryBranchCreate):
+    model_config = ConfigDict(from_attributes=True)
+    id: str
+    project_id: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class ForeshadowCreate(BaseModel):
+    title: str = Field(min_length=1, max_length=200)
+    description: str = ""
+    status: Literal["draft", "planted", "developing", "resolved", "abandoned"] = "draft"
+    planted_chapter_ids: list[str] = Field(default_factory=list)
+    resolved_chapter_ids: list[str] = Field(default_factory=list)
+
+
+class ForeshadowRead(ForeshadowCreate):
+    model_config = ConfigDict(from_attributes=True)
+    id: str
+    project_id: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class ForeshadowLinkCreate(BaseModel):
+    source_type: Literal["chapter", "timeline", "entity"]
+    source_id: str
+    evidence: str = ""
+    link_kind: Literal["planted", "resolved", "evidence"] = "evidence"
+
+
+class ForeshadowLinkRead(ForeshadowLinkCreate):
+    model_config = ConfigDict(from_attributes=True)
+    id: str
+    project_id: str
+    foreshadow_id: str
+    created_at: datetime
+
+
+class JobCreate(BaseModel):
+    job_type: Literal["batch_review", "analysis", "reindex"]
+    input_snapshot: dict[str, Any] = Field(default_factory=dict)
+
+
+class JobRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: str
+    project_id: str
+    job_type: str
+    status: str
+    progress: dict[str, Any]
+    input_snapshot: dict[str, Any]
+    output: dict[str, Any]
+    error: str | None
+    retry_count: int
+    cancel_requested: bool
+    created_at: datetime
+    updated_at: datetime
+    completed_at: datetime | None
+
+
+class EvaluationCaseCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    task_type: Literal["continuation", "rewrite", "qa", "consistency", "summary"]
+    input_data: dict[str, Any] = Field(default_factory=dict)
+    expected: dict[str, Any] = Field(default_factory=dict)
+    enabled: bool = True
+
+
+class EvaluationCaseRead(EvaluationCaseCreate):
+    model_config = ConfigDict(from_attributes=True)
+    id: str
+    project_id: str | None
+    created_at: datetime
+
+
+class EvaluationRunRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: str
+    project_id: str | None
+    case_id: str
+    provider_id: str | None
+    model: str | None
+    prompt_version: str | None
+    result: dict[str, Any]
+    metrics: dict[str, Any]
+    created_at: datetime
 
 
 class ProviderCreate(BaseModel):

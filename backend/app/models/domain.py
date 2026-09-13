@@ -132,6 +132,7 @@ class Entity(Base):
     aliases: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
     description: Mapped[str] = mapped_column(Text, default="", nullable=False)
     attributes: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
+    tags: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
     status: Mapped[str] = mapped_column(String(30), default="draft", nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, nullable=False
@@ -141,6 +142,12 @@ class Entity(Base):
     )
 
     project: Mapped[Project] = relationship(back_populates="entities")
+    source_links: Mapped[list[EntitySourceLink]] = relationship(
+        back_populates="entity", cascade="all, delete-orphan"
+    )
+    revisions: Mapped[list[EntityRevision]] = relationship(
+        back_populates="entity", cascade="all, delete-orphan", order_by="EntityRevision.created_at"
+    )
 
 
 class Note(Base):
@@ -182,6 +189,10 @@ class Operation(Base):
         DateTime(timezone=True), default=utcnow, nullable=False
     )
     applied_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    target_version_hash: Mapped[str | None] = mapped_column(String(64), index=True)
+    diff: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
+    permission: Mapped[str] = mapped_column(String(30), default="approval_required", nullable=False)
+    undo_operation_id: Mapped[str | None] = mapped_column(String(36), index=True)
 
 
 class Provider(Base):
@@ -318,6 +329,192 @@ class AiEvent(Base):
     sequence: Mapped[int] = mapped_column(Integer, nullable=False)
     event_type: Mapped[str] = mapped_column(String(50), nullable=False)
     data: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, nullable=False
+    )
+
+
+class EntitySourceLink(Base):
+    __tablename__ = "entity_source_links"
+    __table_args__ = (UniqueConstraint("entity_id", "chapter_id", name="uq_entity_source_chapter"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    project_id: Mapped[str] = mapped_column(
+        ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    entity_id: Mapped[str] = mapped_column(
+        ForeignKey("entities.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    chapter_id: Mapped[str] = mapped_column(
+        ForeignKey("chapters.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    evidence: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, nullable=False
+    )
+
+    entity: Mapped[Entity] = relationship(back_populates="source_links")
+
+
+class EntityRevision(Base):
+    __tablename__ = "entity_revisions"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    project_id: Mapped[str] = mapped_column(
+        ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    entity_id: Mapped[str] = mapped_column(
+        ForeignKey("entities.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    snapshot: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
+    source: Mapped[str] = mapped_column(String(30), default="user", nullable=False)
+    operation_id: Mapped[str | None] = mapped_column(String(36), index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, nullable=False
+    )
+
+    entity: Mapped[Entity] = relationship(back_populates="revisions")
+
+
+class TimelineEvent(Base):
+    __tablename__ = "timeline_events"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    project_id: Mapped[str] = mapped_column(
+        ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    title: Mapped[str] = mapped_column(String(200), nullable=False)
+    description: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    absolute_time: Mapped[str | None] = mapped_column(String(100))
+    relative_order: Mapped[int | None] = mapped_column(Integer, index=True)
+    time_status: Mapped[str] = mapped_column(String(20), default="unknown", nullable=False)
+    chapter_ids: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
+    entity_ids: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
+    )
+
+
+class StoryBranch(Base):
+    __tablename__ = "story_branches"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    project_id: Mapped[str] = mapped_column(
+        ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    parent_id: Mapped[str | None] = mapped_column(
+        ForeignKey("story_branches.id", ondelete="SET NULL"), index=True
+    )
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    trigger_condition: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    chapter_ids: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
+    status: Mapped[str] = mapped_column(String(30), default="active", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
+    )
+
+
+class Foreshadow(Base):
+    __tablename__ = "foreshadows"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    project_id: Mapped[str] = mapped_column(
+        ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    title: Mapped[str] = mapped_column(String(200), nullable=False)
+    description: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    status: Mapped[str] = mapped_column(String(20), default="draft", nullable=False, index=True)
+    planted_chapter_ids: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
+    resolved_chapter_ids: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
+    )
+
+
+class ForeshadowLink(Base):
+    __tablename__ = "foreshadow_links"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    project_id: Mapped[str] = mapped_column(
+        ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    foreshadow_id: Mapped[str] = mapped_column(
+        ForeignKey("foreshadows.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    source_type: Mapped[str] = mapped_column(String(20), nullable=False)
+    source_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    evidence: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    link_kind: Mapped[str] = mapped_column(String(20), default="evidence", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, nullable=False
+    )
+
+
+class Job(Base):
+    __tablename__ = "jobs"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    project_id: Mapped[str] = mapped_column(
+        ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    job_type: Mapped[str] = mapped_column(String(40), nullable=False, index=True)
+    status: Mapped[str] = mapped_column(String(20), default="queued", nullable=False, index=True)
+    progress: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
+    input_snapshot: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
+    output: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
+    error: Mapped[str | None] = mapped_column(Text)
+    retry_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    cancel_requested: Mapped[bool] = mapped_column(default=False, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class EvaluationCase(Base):
+    __tablename__ = "evaluation_cases"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    project_id: Mapped[str | None] = mapped_column(
+        ForeignKey("projects.id", ondelete="CASCADE"), index=True
+    )
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    task_type: Mapped[str] = mapped_column(String(40), nullable=False)
+    input_data: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
+    expected: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
+    enabled: Mapped[bool] = mapped_column(default=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, nullable=False
+    )
+
+
+class EvaluationRun(Base):
+    __tablename__ = "evaluation_runs"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    project_id: Mapped[str | None] = mapped_column(
+        ForeignKey("projects.id", ondelete="CASCADE"), index=True
+    )
+    case_id: Mapped[str] = mapped_column(
+        ForeignKey("evaluation_cases.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    provider_id: Mapped[str | None] = mapped_column(String(36))
+    model: Mapped[str | None] = mapped_column(String(200))
+    prompt_version: Mapped[str | None] = mapped_column(String(200))
+    result: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
+    metrics: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, nullable=False
     )

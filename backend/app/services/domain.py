@@ -9,6 +9,8 @@ from sqlalchemy.orm import Session
 from app.models.domain import (
     Chapter,
     Entity,
+    EntityRevision,
+    Foreshadow,
     Operation,
     Project,
     Revision,
@@ -52,7 +54,7 @@ def validate_operation_payload(db: Session, chapter: Chapter, data: OperationCre
                 "message": "entity operations must use update_entity",
             },
         )
-    if data.target_type == "chapter" and data.type == "update_entity":
+    if data.target_type == "chapter" and data.type in {"update_entity", "update_foreshadow"}:
         raise HTTPException(
             422,
             detail={
@@ -150,19 +152,37 @@ def create_operation(db: Session, data: OperationCreate) -> Operation:
                         "message": "idempotency key was already used for another operation",
                     },
                 )
+    elif data.type == "update_foreshadow":
+        foreshadow = db.get(Foreshadow, data.target_id)
+        if (
+            data.target_type != "foreshadow"
+            or not foreshadow
+            or foreshadow.project_id != data.project_id
+            or not isinstance(data.payload.get("changes"), dict)
+        ):
+            raise HTTPException(
+                422,
+                detail={"code": "invalid_operation", "message": "foreshadow changes are invalid"},
+            )
             return existing
     get_project(db, data.project_id)
     chapter = None
+    target_hash = None
     if data.target_type == "chapter":
         chapter = get_chapter(db, data.target_id)
         if chapter.volume.project_id != data.project_id:
             raise HTTPException(status_code=400, detail="target does not belong to project")
         validate_operation_payload(db, chapter, data)
     else:
-        entity = db.get(Entity, data.target_id)
+        entity = (
+            db.get(Entity, data.target_id)
+            if data.target_type == "entity"
+            else db.get(Foreshadow, data.target_id)
+        )
         if not entity or entity.project_id != data.project_id:
             raise HTTPException(status_code=400, detail="target does not belong to project")
         validate_operation_payload(db, chapter, data)
+        target_hash = content_hash(str(_snapshot(entity)))
     operation = Operation(
         project_id=data.project_id,
         target_type=data.target_type,
@@ -172,8 +192,14 @@ def create_operation(db: Session, data: OperationCreate) -> Operation:
         old_hash=data.old_hash,
         source=data.source,
         idempotency_key=data.idempotency_key,
+        target_version_hash=chapter.content_hash if chapter is not None else target_hash,
+        permission=data.permission,
+        diff={
+            "before_hash": chapter.content_hash if chapter is not None else target_hash,
+            "payload": data.payload,
+        },
     )
-    current_hash = chapter.content_hash if chapter is not None else None
+    current_hash = chapter.content_hash if chapter is not None else target_hash
     if data.old_hash is not None and data.old_hash != current_hash:
         operation.status = "conflict"
     db.add(operation)
@@ -206,10 +232,46 @@ def approve_operation(db: Session, operation_id: str) -> Operation:
                 status_code=409, detail={"code": "content_conflict", "operation_id": operation.id}
             )
         if operation.type == "update_entity":
+            before = _snapshot(entity)
             changes = operation.payload.get("changes", {})
-            for key in ("name", "description", "aliases", "attributes", "status"):
+            for key in ("name", "description", "aliases", "attributes", "status", "tags"):
                 if key in changes:
                     setattr(entity, key, changes[key])
+            db.add(
+                EntityRevision(
+                    project_id=entity.project_id,
+                    entity_id=entity.id,
+                    snapshot=_snapshot(entity),
+                    source=operation.source,
+                    operation_id=operation.id,
+                )
+            )
+            operation.diff = {"before": before, "after": _snapshot(entity)}
+        operation.status = "applied"
+        operation.applied_at = datetime.now(timezone.utc)
+        db.commit()
+        db.refresh(operation)
+        return operation
+    if operation.target_type == "foreshadow":
+        foreshadow = db.get(Foreshadow, operation.target_id)
+        if not foreshadow or foreshadow.project_id != operation.project_id:
+            operation.status = "conflict"
+            db.commit()
+            raise HTTPException(
+                409, detail={"code": "content_conflict", "operation_id": operation.id}
+            )
+        before = _snapshot(foreshadow)
+        changes = operation.payload.get("changes", {})
+        for key in (
+            "title",
+            "description",
+            "status",
+            "planted_chapter_ids",
+            "resolved_chapter_ids",
+        ):
+            if key in changes:
+                setattr(foreshadow, key, changes[key])
+        operation.diff = {"before": before, "after": _snapshot(foreshadow)}
         operation.status = "applied"
         operation.applied_at = datetime.now(timezone.utc)
         db.commit()
@@ -244,6 +306,11 @@ def approve_operation(db: Session, operation_id: str) -> Operation:
     chapter.content_hash = content_hash(chapter.content)
     if chapter.content != old_content:
         create_revision(db, chapter, operation.source, operation.id)
+    operation.diff = {
+        "before": {"content": old_content, "hash": content_hash(old_content)},
+        "after": {"content": chapter.content, "hash": chapter.content_hash},
+    }
+    operation.target_version_hash = chapter.content_hash
     operation.status = "applied"
     operation.applied_at = datetime.now(timezone.utc)
     db.commit()
@@ -260,3 +327,80 @@ def reject_operation(db: Session, operation_id: str) -> Operation:
         db.commit()
         db.refresh(operation)
     return operation
+
+
+def undo_operation(db: Session, operation_id: str) -> Operation:
+    operation = db.get(Operation, operation_id)
+    if not operation:
+        raise _not_found("operation")
+    if operation.status != "applied" or not operation.diff:
+        raise HTTPException(
+            409, detail={"code": "undo_unavailable", "message": "operation has no applied diff"}
+        )
+    before = operation.diff.get("before", {})
+    if (
+        operation.target_type == "chapter"
+        and isinstance(before, dict)
+        and isinstance(before.get("content"), str)
+    ):
+        chapter = get_chapter(db, operation.target_id)
+        inverse = OperationCreate(
+            project_id=operation.project_id,
+            target_type="chapter",
+            target_id=operation.target_id,
+            type="replace_range",
+            payload={"from": 0, "to": len(chapter.content), "new_text": before["content"]},
+            old_hash=chapter.content_hash,
+            source="user",
+            permission="approval_required",
+        )
+    elif operation.target_type == "entity" and isinstance(before, dict):
+        inverse = OperationCreate(
+            project_id=operation.project_id,
+            target_type="entity",
+            target_id=operation.target_id,
+            type="update_entity",
+            payload={"changes": before},
+            source="user",
+            permission="approval_required",
+        )
+    elif operation.target_type == "foreshadow" and isinstance(before, dict):
+        inverse = OperationCreate(
+            project_id=operation.project_id,
+            target_type="foreshadow",
+            target_id=operation.target_id,
+            type="update_foreshadow",
+            payload={"changes": before},
+            source="user",
+            permission="approval_required",
+        )
+    else:
+        raise HTTPException(
+            409, detail={"code": "undo_unavailable", "message": "operation diff is incomplete"}
+        )
+    created = create_operation(db, inverse)
+    operation.undo_operation_id = created.id
+    db.commit()
+    db.refresh(created)
+    return created
+
+
+def _snapshot(value: object) -> dict[str, object]:
+    if isinstance(value, Entity):
+        return {
+            "name": value.name,
+            "description": value.description,
+            "aliases": value.aliases or [],
+            "attributes": value.attributes or {},
+            "status": value.status,
+            "tags": value.tags or [],
+        }
+    if isinstance(value, Foreshadow):
+        return {
+            "title": value.title,
+            "description": value.description,
+            "status": value.status,
+            "planted_chapter_ids": value.planted_chapter_ids or [],
+            "resolved_chapter_ids": value.resolved_chapter_ids or [],
+        }
+    return {}

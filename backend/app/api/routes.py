@@ -21,6 +21,13 @@ from app.models.domain import (
     AiSession,
     Chapter,
     Entity,
+    EntityRevision,
+    EntitySourceLink,
+    EvaluationCase,
+    EvaluationRun,
+    Foreshadow,
+    ForeshadowLink,
+    Job,
     Note,
     Operation,
     Project,
@@ -28,6 +35,8 @@ from app.models.domain import (
     PromptVersion,
     Provider,
     Revision,
+    StoryBranch,
+    TimelineEvent,
     Volume,
     content_hash,
 )
@@ -47,6 +56,18 @@ from app.schemas.domain import (
     EntityPage,
     EntityPatch,
     EntityRead,
+    EntityRevisionRead,
+    EntitySourceLinkCreate,
+    EntitySourceLinkRead,
+    EvaluationCaseCreate,
+    EvaluationCaseRead,
+    EvaluationRunRead,
+    ForeshadowCreate,
+    ForeshadowLinkCreate,
+    ForeshadowLinkRead,
+    ForeshadowRead,
+    JobCreate,
+    JobRead,
     NoteCreate,
     NotePage,
     NotePatch,
@@ -74,6 +95,10 @@ from app.schemas.domain import (
     RevisionRead,
     SearchProjectRequest,
     SearchProjectToolRequest,
+    StoryBranchCreate,
+    StoryBranchRead,
+    TimelineEventCreate,
+    TimelineEventRead,
     ToolResult,
     UpdateEntityToolRequest,
     VolumeCreate,
@@ -105,8 +130,10 @@ from app.services.domain import (
     get_project,
     get_volume,
     reject_operation,
+    undo_operation,
 )
 from app.services.domain import create_operation as create_operation_service
+from app.services.jobs import run_job
 from app.services.prompts import build_prompt, validate_prompt
 from app.services.search import rebuild_project_index, search_project
 from app.services.transfer import decode_import_bytes, export_json, export_zip, import_project
@@ -932,7 +959,10 @@ def list_revisions(chapter_id: str, db: Session = Depends(get_db)):
 
 @router.post("/operations", response_model=OperationRead, status_code=status.HTTP_201_CREATED)
 def create_operation(data: OperationCreate, db: Session = Depends(get_db)):
-    return create_operation_service(db, data)
+    operation = create_operation_service(db, data)
+    if operation.permission == "auto" and operation.status == "pending":
+        operation = approve_operation(db, operation.id)
+    return operation
 
 
 @router.post("/operations/{operation_id}/approve", response_model=OperationRead)
@@ -943,6 +973,11 @@ def approve(operation_id: str, db: Session = Depends(get_db)):
 @router.post("/operations/{operation_id}/reject", response_model=OperationRead)
 def reject(operation_id: str, db: Session = Depends(get_db)):
     return reject_operation(db, operation_id)
+
+
+@router.post("/operations/{operation_id}/undo", response_model=OperationRead, status_code=201)
+def undo(operation_id: str, db: Session = Depends(get_db)):
+    return undo_operation(db, operation_id)
 
 
 @router.get("/operations/{operation_id}", response_model=OperationRead)
@@ -995,6 +1030,21 @@ def patch_entity(entity_id: str, data: EntityPatch, db: Session = Depends(get_db
         raise HTTPException(404, "entity not found")
     for key, value in data.model_dump(exclude_unset=True).items():
         setattr(entity, key, value)
+    db.add(
+        EntityRevision(
+            project_id=entity.project_id,
+            entity_id=entity.id,
+            snapshot={
+                "name": entity.name,
+                "description": entity.description,
+                "aliases": entity.aliases or [],
+                "attributes": entity.attributes or {},
+                "status": entity.status,
+                "tags": entity.tags or [],
+            },
+            source="user",
+        )
+    )
     db.commit()
     db.refresh(entity)
     return entity
@@ -1106,3 +1156,292 @@ def delete_note(note_id: str, db: Session = Depends(get_db)):
         raise HTTPException(404, "note not found")
     db.delete(note)
     db.commit()
+
+
+@router.post("/projects/{project_id}/jobs", response_model=JobRead, status_code=202)
+def create_job(project_id: str, data: JobCreate, db: Session = Depends(get_db)):
+    get_project(db, project_id)
+    job = Job(project_id=project_id, job_type=data.job_type, input_snapshot=data.input_snapshot)
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+    # Jobs are persisted before execution, so a process restart can resume queued work.
+    return run_job(db, job)
+
+
+@router.get("/projects/{project_id}/jobs", response_model=list[JobRead])
+def list_jobs(project_id: str, db: Session = Depends(get_db)):
+    get_project(db, project_id)
+    return list(
+        db.scalars(select(Job).where(Job.project_id == project_id).order_by(Job.created_at.desc()))
+    )
+
+
+@router.get("/jobs/{job_id}", response_model=JobRead)
+def read_job(job_id: str, db: Session = Depends(get_db)):
+    job = db.get(Job, job_id)
+    if not job:
+        raise HTTPException(404, "job not found")
+    return job
+
+
+@router.post("/jobs/{job_id}/pause", response_model=JobRead)
+def pause_job(job_id: str, db: Session = Depends(get_db)):
+    job = db.get(Job, job_id)
+    if not job:
+        raise HTTPException(404, "job not found")
+    if job.status in {"queued", "running"}:
+        job.status = "paused"
+        db.commit()
+        db.refresh(job)
+    return job
+
+
+@router.post("/jobs/{job_id}/resume", response_model=JobRead)
+def resume_job(job_id: str, db: Session = Depends(get_db)):
+    job = db.get(Job, job_id)
+    if not job:
+        raise HTTPException(404, "job not found")
+    if job.status in {"paused", "failed"}:
+        job.retry_count += 1
+        job.error = None
+        db.commit()
+        return run_job(db, job)
+    return job
+
+
+@router.post("/jobs/{job_id}/cancel", response_model=JobRead)
+def cancel_job(job_id: str, db: Session = Depends(get_db)):
+    job = db.get(Job, job_id)
+    if not job:
+        raise HTTPException(404, "job not found")
+    job.cancel_requested = True
+    job.status = "cancelled"
+    db.commit()
+    db.refresh(job)
+    return job
+
+
+@router.get("/jobs/{job_id}/report")
+def export_job_report(job_id: str, db: Session = Depends(get_db)):
+    job = db.get(Job, job_id)
+    if not job:
+        raise HTTPException(404, "job not found")
+    return Response(
+        json.dumps(job.output, ensure_ascii=False, indent=2),
+        media_type="application/json",
+        headers={"Content-Disposition": f'attachment; filename="review-{job.id[:8]}.json"'},
+    )
+
+
+@router.post(
+    "/projects/{project_id}/evaluation-cases", response_model=EvaluationCaseRead, status_code=201
+)
+def create_evaluation_case(
+    project_id: str, data: EvaluationCaseCreate, db: Session = Depends(get_db)
+):
+    get_project(db, project_id)
+    case = EvaluationCase(project_id=project_id, **data.model_dump())
+    db.add(case)
+    db.commit()
+    db.refresh(case)
+    return case
+
+
+@router.get("/projects/{project_id}/evaluation-cases", response_model=list[EvaluationCaseRead])
+def list_evaluation_cases(project_id: str, db: Session = Depends(get_db)):
+    get_project(db, project_id)
+    return list(
+        db.scalars(
+            select(EvaluationCase)
+            .where(EvaluationCase.project_id == project_id)
+            .order_by(EvaluationCase.created_at)
+        )
+    )
+
+
+@router.post("/evaluation-cases/{case_id}/runs", response_model=EvaluationRunRead, status_code=201)
+def run_evaluation(case_id: str, db: Session = Depends(get_db)):
+    case = db.get(EvaluationCase, case_id)
+    if not case:
+        raise HTTPException(404, "evaluation case not found")
+    actual = case.input_data.get("actual", case.input_data)
+    expected = case.expected
+    exact = actual == expected if expected else None
+    run = EvaluationRun(
+        project_id=case.project_id,
+        case_id=case.id,
+        result={"actual": actual, "expected": expected},
+        metrics={
+            "exact_match": exact,
+            "human_score": None,
+            "citation_accuracy": None,
+            "tokens": 0,
+            "latency_ms": 0,
+            "cost": 0,
+        },
+    )
+    db.add(run)
+    db.commit()
+    db.refresh(run)
+    return run
+
+
+@router.get("/projects/{project_id}/evaluation-runs", response_model=list[EvaluationRunRead])
+def list_evaluation_runs(project_id: str, db: Session = Depends(get_db)):
+    get_project(db, project_id)
+    return list(
+        db.scalars(
+            select(EvaluationRun)
+            .where(EvaluationRun.project_id == project_id)
+            .order_by(EvaluationRun.created_at.desc())
+        )
+    )
+
+
+@router.get("/entities/{entity_id}/sources", response_model=list[EntitySourceLinkRead])
+def list_entity_sources(entity_id: str, db: Session = Depends(get_db)):
+    entity = db.get(Entity, entity_id)
+    if not entity:
+        raise HTTPException(404, "entity not found")
+    return list(
+        db.scalars(
+            select(EntitySourceLink)
+            .where(EntitySourceLink.entity_id == entity_id)
+            .order_by(EntitySourceLink.created_at)
+        )
+    )
+
+
+@router.post("/entities/{entity_id}/sources", response_model=EntitySourceLinkRead, status_code=201)
+def create_entity_source(
+    entity_id: str, data: EntitySourceLinkCreate, db: Session = Depends(get_db)
+):
+    entity = db.get(Entity, entity_id)
+    chapter = db.get(Chapter, data.chapter_id)
+    if not entity or not chapter or chapter.volume.project_id != entity.project_id:
+        raise HTTPException(400, "source does not belong to project")
+    link = EntitySourceLink(project_id=entity.project_id, entity_id=entity.id, **data.model_dump())
+    db.add(link)
+    db.commit()
+    db.refresh(link)
+    return link
+
+
+@router.get("/entities/{entity_id}/revisions", response_model=list[EntityRevisionRead])
+def list_entity_revisions(entity_id: str, db: Session = Depends(get_db)):
+    if not db.get(Entity, entity_id):
+        raise HTTPException(404, "entity not found")
+    return list(
+        db.scalars(
+            select(EntityRevision)
+            .where(EntityRevision.entity_id == entity_id)
+            .order_by(EntityRevision.created_at.desc())
+        )
+    )
+
+
+@router.post("/projects/{project_id}/timeline", response_model=TimelineEventRead, status_code=201)
+def create_timeline_event(
+    project_id: str, data: TimelineEventCreate, db: Session = Depends(get_db)
+):
+    get_project(db, project_id)
+    event = TimelineEvent(project_id=project_id, **data.model_dump())
+    db.add(event)
+    db.commit()
+    db.refresh(event)
+    return event
+
+
+@router.get("/projects/{project_id}/timeline", response_model=list[TimelineEventRead])
+def list_timeline_events(project_id: str, db: Session = Depends(get_db)):
+    get_project(db, project_id)
+    return list(
+        db.scalars(
+            select(TimelineEvent)
+            .where(TimelineEvent.project_id == project_id)
+            .order_by(
+                TimelineEvent.relative_order.is_(None),
+                TimelineEvent.relative_order,
+                TimelineEvent.absolute_time,
+                TimelineEvent.created_at,
+            )
+        )
+    )
+
+
+@router.post("/projects/{project_id}/branches", response_model=StoryBranchRead, status_code=201)
+def create_story_branch(project_id: str, data: StoryBranchCreate, db: Session = Depends(get_db)):
+    get_project(db, project_id)
+    if data.parent_id:
+        parent = db.get(StoryBranch, data.parent_id)
+        if not parent or parent.project_id != project_id:
+            raise HTTPException(400, "parent does not belong to project")
+    branch = StoryBranch(project_id=project_id, **data.model_dump())
+    db.add(branch)
+    db.commit()
+    db.refresh(branch)
+    return branch
+
+
+@router.get("/projects/{project_id}/branches", response_model=list[StoryBranchRead])
+def list_story_branches(project_id: str, db: Session = Depends(get_db)):
+    get_project(db, project_id)
+    return list(
+        db.scalars(
+            select(StoryBranch)
+            .where(StoryBranch.project_id == project_id)
+            .order_by(StoryBranch.created_at)
+        )
+    )
+
+
+@router.post("/projects/{project_id}/foreshadows", response_model=ForeshadowRead, status_code=201)
+def create_foreshadow(project_id: str, data: ForeshadowCreate, db: Session = Depends(get_db)):
+    get_project(db, project_id)
+    item = Foreshadow(project_id=project_id, **data.model_dump())
+    db.add(item)
+    db.commit()
+    db.refresh(item)
+    return item
+
+
+@router.get("/projects/{project_id}/foreshadows", response_model=list[ForeshadowRead])
+def list_foreshadows(project_id: str, db: Session = Depends(get_db)):
+    get_project(db, project_id)
+    return list(
+        db.scalars(
+            select(Foreshadow)
+            .where(Foreshadow.project_id == project_id)
+            .order_by(Foreshadow.status, Foreshadow.created_at)
+        )
+    )
+
+
+@router.post(
+    "/foreshadows/{foreshadow_id}/links", response_model=ForeshadowLinkRead, status_code=201
+)
+def create_foreshadow_link(
+    foreshadow_id: str, data: ForeshadowLinkCreate, db: Session = Depends(get_db)
+):
+    item = db.get(Foreshadow, foreshadow_id)
+    if not item:
+        raise HTTPException(404, "foreshadow not found")
+    link = ForeshadowLink(project_id=item.project_id, foreshadow_id=item.id, **data.model_dump())
+    db.add(link)
+    db.commit()
+    db.refresh(link)
+    return link
+
+
+@router.get("/foreshadows/{foreshadow_id}/links", response_model=list[ForeshadowLinkRead])
+def list_foreshadow_links(foreshadow_id: str, db: Session = Depends(get_db)):
+    if not db.get(Foreshadow, foreshadow_id):
+        raise HTTPException(404, "foreshadow not found")
+    return list(
+        db.scalars(
+            select(ForeshadowLink)
+            .where(ForeshadowLink.foreshadow_id == foreshadow_id)
+            .order_by(ForeshadowLink.created_at)
+        )
+    )

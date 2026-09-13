@@ -1,3 +1,37 @@
-from app.models.domain import Chapter, Entity, Note, Operation, Project, Revision, Volume
+from app.models.domain import (
+    Chapter,
+    Entity,
+    EntityRevision,
+    EntitySourceLink,
+    EvaluationCase,
+    EvaluationRun,
+    Foreshadow,
+    ForeshadowLink,
+    Job,
+    Note,
+    Operation,
+    Project,
+    Revision,
+    StoryBranch,
+    TimelineEvent,
+    Volume,
+)
 
-__all__ = ["Chapter", "Entity", "Note", "Operation", "Project", "Revision", "Volume"]
+__all__ = [
+    "Chapter",
+    "Entity",
+    "EntityRevision",
+    "EntitySourceLink",
+    "EvaluationCase",
+    "EvaluationRun",
+    "Foreshadow",
+    "ForeshadowLink",
+    "Job",
+    "Note",
+    "Operation",
+    "Project",
+    "Revision",
+    "StoryBranch",
+    "TimelineEvent",
+    "Volume",
+]

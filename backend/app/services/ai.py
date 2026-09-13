@@ -283,7 +283,17 @@ async def run_message(
         provider = db.get(Provider, session.provider_id) if session.provider_id else None
         if not provider:
             raise RuntimeError("no provider configured for this session")
-        adapter = provider_for(provider)
+        providers = [provider]
+        # A deterministic first enabled provider is the documented backup path.
+        providers.extend(
+            p
+            for p in db.scalars(
+                select(Provider)
+                .where(Provider.enabled, Provider.id != provider.id)
+                .order_by(Provider.created_at)
+            )
+            if p.id != provider.id
+        )
         session.status = "running"
         message.status = "streaming"
         db.commit()
@@ -333,13 +343,32 @@ async def run_message(
             messages.append({"role": "system", "content": session.system_prompt})
         messages.append({"role": "user", "content": prompt})
         chunks: list[str] = []
-        async for chunk in adapter.stream(messages, session.model or provider.model):
-            if cancel_event.is_set() or session.status == "cancelled":
-                return
-            chunks.append(chunk)
-            append_event(
-                db, session_id, "assistant.delta", {"message_id": message_id, "text": chunk}
-            )
+        last_error: Exception | None = None
+        actual_provider = provider
+        for candidate in providers:
+            try:
+                adapter = provider_for(candidate)
+                actual_provider = candidate
+                async for chunk in adapter.stream(messages, session.model or candidate.model):
+                    if cancel_event.is_set() or session.status == "cancelled":
+                        return
+                    chunks.append(chunk)
+                    append_event(
+                        db, session_id, "assistant.delta", {"message_id": message_id, "text": chunk}
+                    )
+                if chunks or candidate is providers[-1]:
+                    break
+            except Exception as exc:
+                last_error = exc
+                append_event(
+                    db,
+                    session_id,
+                    "provider.fallback",
+                    {"from_provider_id": candidate.id, "reason": str(exc)[:300]},
+                )
+                continue
+        if not chunks and last_error:
+            raise last_error
         answer = "".join(chunks)
         message.prompt_tokens = max(1, len(prompt) // 4)
         message.completion_tokens = max(1, len(answer) // 4) if answer else 0
@@ -360,7 +389,12 @@ async def run_message(
             db,
             session_id,
             "assistant.completed",
-            {"message_id": message_id, "content": answer},
+            {
+                "message_id": message_id,
+                "content": answer,
+                "provider_id": actual_provider.id,
+                "model": session.model or actual_provider.model,
+            },
         )
         if chapter_id and answer:
             chapter = db.get(Chapter, chapter_id)
