@@ -1,5 +1,5 @@
-from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import select
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
@@ -15,21 +15,27 @@ from app.models.domain import (
 )
 from app.schemas.domain import (
     ChapterCreate,
+    ChapterPage,
     ChapterPatch,
     ChapterRead,
     EntityCreate,
+    EntityPage,
     EntityPatch,
     EntityRead,
     NoteCreate,
+    NotePage,
     NotePatch,
     NoteRead,
     OperationCreate,
     OperationRead,
+    PageMeta,
     ProjectCreate,
+    ProjectPage,
     ProjectPatch,
     ProjectRead,
     RevisionRead,
     VolumeCreate,
+    VolumePage,
     VolumePatch,
     VolumeRead,
 )
@@ -41,9 +47,8 @@ from app.services.domain import (
     get_volume,
     reject_operation,
 )
-from app.services.domain import (
-    create_operation as create_operation_service,
-)
+from app.services.domain import create_operation as create_operation_service
+from app.services.transfer import decode_import_bytes, export_json, export_zip, import_project
 
 router = APIRouter(prefix="/api/v1")
 
@@ -57,9 +62,28 @@ def create_project(data: ProjectCreate, db: Session = Depends(get_db)):
     return project
 
 
-@router.get("/projects", response_model=list[ProjectRead])
-def list_projects(db: Session = Depends(get_db)):
-    return list(db.scalars(select(Project).order_by(Project.created_at.desc())))
+def _page(page: int, page_size: int, total: int) -> PageMeta:
+    return PageMeta(page=page, page_size=page_size, total=total, has_next=page * page_size < total)
+
+
+@router.get("/projects", response_model=list[ProjectRead] | ProjectPage)
+def list_projects(
+    page: int | None = Query(default=None, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
+    db: Session = Depends(get_db),
+):
+    if page is None:
+        return list(db.scalars(select(Project).order_by(Project.created_at.desc(), Project.id)))
+    total = db.scalar(select(func.count()).select_from(Project)) or 0
+    items = list(
+        db.scalars(
+            select(Project)
+            .order_by(Project.created_at.desc(), Project.id)
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+        )
+    )
+    return {"items": items, "meta": _page(page, page_size, total)}
 
 
 @router.get("/projects/{project_id}", response_model=ProjectRead)
@@ -89,19 +113,49 @@ def delete_project(project_id: str, db: Session = Depends(get_db)):
 )
 def create_volume(project_id: str, data: VolumeCreate, db: Session = Depends(get_db)):
     get_project(db, project_id)
-    volume = Volume(project_id=project_id, **data.model_dump())
+    values = data.model_dump()
+    if (
+        values["position"] == 0
+        and (
+            db.scalar(
+                select(func.count()).select_from(Volume).where(Volume.project_id == project_id)
+            )
+            or 0
+        )
+        > 0
+    ):
+        max_position = db.scalar(
+            select(func.max(Volume.position)).where(Volume.project_id == project_id)
+        )
+        values["position"] = (max_position if max_position is not None else -1) + 1
+    volume = Volume(project_id=project_id, **values)
     db.add(volume)
     db.commit()
     db.refresh(volume)
     return volume
 
 
-@router.get("/projects/{project_id}/volumes", response_model=list[VolumeRead])
-def list_volumes(project_id: str, db: Session = Depends(get_db)):
+@router.get("/projects/{project_id}/volumes", response_model=list[VolumeRead] | VolumePage)
+def list_volumes(
+    project_id: str,
+    page: int | None = Query(default=None, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
+    db: Session = Depends(get_db),
+):
     get_project(db, project_id)
-    return list(
-        db.scalars(select(Volume).where(Volume.project_id == project_id).order_by(Volume.position))
+    query = (
+        select(Volume).where(Volume.project_id == project_id).order_by(Volume.position, Volume.id)
     )
+    if page is None:
+        return list(db.scalars(query))
+    total = (
+        db.scalar(select(func.count()).select_from(Volume).where(Volume.project_id == project_id))
+        or 0
+    )
+    return {
+        "items": list(db.scalars(query.offset((page - 1) * page_size).limit(page_size))),
+        "meta": _page(page, page_size, total),
+    }
 
 
 @router.get("/projects/{project_id}/tree")
@@ -151,7 +205,22 @@ def patch_volume(volume_id: str, data: VolumePatch, db: Session = Depends(get_db
 )
 def create_chapter(volume_id: str, data: ChapterCreate, db: Session = Depends(get_db)):
     get_volume(db, volume_id)
-    chapter = Chapter(volume_id=volume_id, **data.model_dump())
+    values = data.model_dump()
+    if (
+        values["position"] == 0
+        and (
+            db.scalar(
+                select(func.count()).select_from(Chapter).where(Chapter.volume_id == volume_id)
+            )
+            or 0
+        )
+        > 0
+    ):
+        max_position = db.scalar(
+            select(func.max(Chapter.position)).where(Chapter.volume_id == volume_id)
+        )
+        values["position"] = (max_position if max_position is not None else -1) + 1
+    chapter = Chapter(volume_id=volume_id, **values)
     chapter.word_count = len(chapter.content)
     chapter.content_hash = content_hash(chapter.content)
     db.add(chapter)
@@ -165,6 +234,29 @@ def create_chapter(volume_id: str, data: ChapterCreate, db: Session = Depends(ge
 @router.get("/chapters/{chapter_id}", response_model=ChapterRead)
 def read_chapter(chapter_id: str, db: Session = Depends(get_db)):
     return get_chapter(db, chapter_id)
+
+
+@router.get("/volumes/{volume_id}/chapters", response_model=list[ChapterRead] | ChapterPage)
+def list_chapters(
+    volume_id: str,
+    page: int | None = Query(default=None, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
+    db: Session = Depends(get_db),
+):
+    get_volume(db, volume_id)
+    query = (
+        select(Chapter).where(Chapter.volume_id == volume_id).order_by(Chapter.position, Chapter.id)
+    )
+    if page is None:
+        return list(db.scalars(query))
+    total = (
+        db.scalar(select(func.count()).select_from(Chapter).where(Chapter.volume_id == volume_id))
+        or 0
+    )
+    return {
+        "items": list(db.scalars(query.offset((page - 1) * page_size).limit(page_size))),
+        "meta": _page(page, page_size, total),
+    }
 
 
 @router.patch("/chapters/{chapter_id}", response_model=ChapterRead)
@@ -233,12 +325,25 @@ def create_entity(project_id: str, data: EntityCreate, db: Session = Depends(get
     return entity
 
 
-@router.get("/projects/{project_id}/entities", response_model=list[EntityRead])
-def list_entities(project_id: str, db: Session = Depends(get_db)):
+@router.get("/projects/{project_id}/entities", response_model=list[EntityRead] | EntityPage)
+def list_entities(
+    project_id: str,
+    page: int | None = Query(default=None, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
+    db: Session = Depends(get_db),
+):
     get_project(db, project_id)
-    return list(
-        db.scalars(select(Entity).where(Entity.project_id == project_id).order_by(Entity.name))
+    query = select(Entity).where(Entity.project_id == project_id).order_by(Entity.name, Entity.id)
+    if page is None:
+        return list(db.scalars(query))
+    total = (
+        db.scalar(select(func.count()).select_from(Entity).where(Entity.project_id == project_id))
+        or 0
     )
+    return {
+        "items": list(db.scalars(query.offset((page - 1) * page_size).limit(page_size))),
+        "meta": _page(page, page_size, total),
+    }
 
 
 @router.patch("/entities/{entity_id}", response_model=EntityRead)
@@ -274,14 +379,70 @@ def create_note(project_id: str, data: NoteCreate, db: Session = Depends(get_db)
     return note
 
 
-@router.get("/projects/{project_id}/notes", response_model=list[NoteRead])
-def list_notes(project_id: str, db: Session = Depends(get_db)):
+@router.get("/projects/{project_id}/notes", response_model=list[NoteRead] | NotePage)
+def list_notes(
+    project_id: str,
+    page: int | None = Query(default=None, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
+    db: Session = Depends(get_db),
+):
     get_project(db, project_id)
-    return list(
+    query = (
+        select(Note).where(Note.project_id == project_id).order_by(Note.created_at.desc(), Note.id)
+    )
+    if page is None:
+        return list(db.scalars(query))
+    total = (
+        db.scalar(select(func.count()).select_from(Note).where(Note.project_id == project_id)) or 0
+    )
+    return {
+        "items": list(db.scalars(query.offset((page - 1) * page_size).limit(page_size))),
+        "meta": _page(page, page_size, total),
+    }
+
+
+@router.get("/projects/{project_id}/export")
+def export_project(project_id: str, format: str = "json", db: Session = Depends(get_db)):
+    project = get_project(db, project_id)
+    operations = list(
         db.scalars(
-            select(Note).where(Note.project_id == project_id).order_by(Note.created_at.desc())
+            select(Operation)
+            .where(Operation.project_id == project_id)
+            .order_by(Operation.created_at)
         )
     )
+    if format == "json":
+        return Response(
+            export_json(project, operations),
+            media_type="application/json",
+            headers={
+                "Content-Disposition": (
+                    f'attachment; filename="novel-workbench-{project.id[:8]}.json"'
+                )
+            },
+        )
+    if format == "zip":
+        return Response(
+            export_zip(project, operations),
+            media_type="application/zip",
+            headers={
+                "Content-Disposition": (
+                    f'attachment; filename="novel-workbench-{project.id[:8]}.zip"'
+                )
+            },
+        )
+    raise HTTPException(
+        422, detail={"code": "invalid_format", "message": "format must be json or zip"}
+    )
+
+
+@router.post("/projects/import", response_model=ProjectRead, status_code=status.HTTP_201_CREATED)
+async def import_project_route(request: Request, db: Session = Depends(get_db)):
+    raw = await request.body()
+    document = decode_import_bytes(
+        raw, request.headers.get("x-filename"), request.headers.get("content-type")
+    )
+    return import_project(db, document)
 
 
 @router.patch("/notes/{note_id}", response_model=NoteRead)
