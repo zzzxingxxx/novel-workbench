@@ -1,5 +1,6 @@
 import asyncio
 import json
+from typing import Any
 
 from fastapi import (
     APIRouter,
@@ -1341,6 +1342,20 @@ def list_entity_revisions(entity_id: str, db: Session = Depends(get_db)):
     )
 
 
+@router.get("/entities/{entity_id}/affected-chapters")
+def affected_entity_chapters(entity_id: str, db: Session = Depends(get_db)):
+    entity = db.get(Entity, entity_id)
+    if not entity:
+        raise HTTPException(404, "entity not found")
+    chapters = db.scalars(
+        select(Chapter)
+        .join(EntitySourceLink, EntitySourceLink.chapter_id == Chapter.id)
+        .where(EntitySourceLink.entity_id == entity_id)
+        .order_by(Chapter.position, Chapter.id)
+    )
+    return [{"id": item.id, "title": item.title, "volume_id": item.volume_id} for item in chapters]
+
+
 @router.post("/projects/{project_id}/timeline", response_model=TimelineEventRead, status_code=201)
 def create_timeline_event(
     project_id: str, data: TimelineEventCreate, db: Session = Depends(get_db)
@@ -1370,6 +1385,27 @@ def list_timeline_events(project_id: str, db: Session = Depends(get_db)):
     )
 
 
+@router.patch("/timeline/{event_id}", response_model=TimelineEventRead)
+def patch_timeline_event(event_id: str, data: dict[str, Any], db: Session = Depends(get_db)):
+    event = db.get(TimelineEvent, event_id)
+    if not event:
+        raise HTTPException(404, "timeline event not found")
+    for key in (
+        "title",
+        "description",
+        "absolute_time",
+        "relative_order",
+        "time_status",
+        "chapter_ids",
+        "entity_ids",
+    ):
+        if key in data:
+            setattr(event, key, data[key])
+    db.commit()
+    db.refresh(event)
+    return event
+
+
 @router.post("/projects/{project_id}/branches", response_model=StoryBranchRead, status_code=201)
 def create_story_branch(project_id: str, data: StoryBranchCreate, db: Session = Depends(get_db)):
     get_project(db, project_id)
@@ -1396,6 +1432,19 @@ def list_story_branches(project_id: str, db: Session = Depends(get_db)):
     )
 
 
+@router.patch("/branches/{branch_id}", response_model=StoryBranchRead)
+def patch_story_branch(branch_id: str, data: dict[str, Any], db: Session = Depends(get_db)):
+    branch = db.get(StoryBranch, branch_id)
+    if not branch:
+        raise HTTPException(404, "story branch not found")
+    for key in ("name", "parent_id", "trigger_condition", "chapter_ids", "status"):
+        if key in data:
+            setattr(branch, key, data[key])
+    db.commit()
+    db.refresh(branch)
+    return branch
+
+
 @router.post("/projects/{project_id}/foreshadows", response_model=ForeshadowRead, status_code=201)
 def create_foreshadow(project_id: str, data: ForeshadowCreate, db: Session = Depends(get_db)):
     get_project(db, project_id)
@@ -1416,6 +1465,20 @@ def list_foreshadows(project_id: str, db: Session = Depends(get_db)):
             .order_by(Foreshadow.status, Foreshadow.created_at)
         )
     )
+
+
+@router.patch("/foreshadows/{foreshadow_id}", response_model=ForeshadowRead)
+def patch_foreshadow(foreshadow_id: str, data: dict[str, Any], db: Session = Depends(get_db)):
+    item = db.get(Foreshadow, foreshadow_id)
+    if not item:
+        raise HTTPException(404, "foreshadow not found")
+    allowed = {"title", "description", "status", "planted_chapter_ids", "resolved_chapter_ids"}
+    for key, value in data.items():
+        if key in allowed:
+            setattr(item, key, value)
+    db.commit()
+    db.refresh(item)
+    return item
 
 
 @router.post(
