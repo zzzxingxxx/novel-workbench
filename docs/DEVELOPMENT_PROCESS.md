@@ -229,7 +229,7 @@ CI 首先只做：安装、格式检查、类型检查、单元测试、前端�
 - 前端助手已接入真实 session、EventSource 流式 delta、失败提示和待审批操作标识，演示项目继续使用本地 fallback；
 - 已覆盖 Provider 密钥脱敏、mock SSE、事件续传、消息幂等、无 Provider 失败和 migration 升降级测试。
 
-阶段 3 暂不包含多 Provider 自动路由、系统提示词版本管理、SSE 事件清理任务和长任务 jobs 表；这些功能按后续阶段接入。
+阶段 3 当时暂不包含多 Provider 自动路由、系统提示词版本管理、SSE 事件清理任务和长任务 jobs 表；系统提示词版本管理已在阶段 4 接入。
 
 ## 8. 系统提示词管理
 
@@ -263,6 +263,20 @@ CI 首先只做：安装、格式检查、类型检查、单元测试、前端�
 - 变量渲染结果可在调用前预览；
 - 任意 AI 消息都能追溯到系统提示词版本；
 - 恢复旧提示词后，新调用使用旧版本，历史调用保持不变。
+
+### 8.5 阶段 4 实现状态（系统提示词）
+
+阶段 4 已完成系统提示词的后端闭环和首个管理界面：
+
+- 新增 `prompt_templates` 与 `prompt_versions`，模板覆盖 global、project、agent、workflow、session 五级语义；
+- 模板首次创建自动生成 v1，内容或变量更新生成新版本，旧版本保持不可变；支持启用/停用和恢复任意历史版本；
+- 渲染顺序固定为 global → project → agent → workflow → session，同一层按创建时间稳定排序；Agent/Workflow 模板同时按项目隔离；
+- 只允许 `project.name`、`project.description`、`chapter.title`、`chapter.content`、`selected_text`、`user.instruction`、`session.prompt`，模板会校验声明、占位符和必填变量；
+- 项目名和项目描述作为默认变量自动注入，敏感字段（API key、password、secret、token 等赋值形式）被拒绝保存；
+- `POST /api/v1/prompts/preview` 返回最终 Prompt、分段、版本 ID、SHA-256 digest 和估算 token；合并结果附带不可信数据边界；
+- 创建 AI session 时冻结最终 system prompt、变量、版本 ID、分段快照和 digest，后续模板修改不会改变历史会话；`session.started` 事件同步记录版本追踪信息；
+- React 助手顶部设置入口提供轻量提示词抽屉，可查看模板、启停、保存新版本和预览；不改变三栏编辑器布局；
+- 新增提示词 CRUD、版本、作用域隔离、变量校验、敏感内容拦截、session 快照和迁移回滚测试，迁移版本为 `0003_prompt_system`。
 
 ## 9. 上下文构建与基础工具（第 6～7 周）
 

@@ -24,6 +24,8 @@ from app.models.domain import (
     Note,
     Operation,
     Project,
+    PromptTemplate,
+    PromptVersion,
     Provider,
     Revision,
     Volume,
@@ -54,6 +56,13 @@ from app.schemas.domain import (
     ProjectPage,
     ProjectPatch,
     ProjectRead,
+    PromptPreviewRead,
+    PromptPreviewRequest,
+    PromptTemplateCreate,
+    PromptTemplatePatch,
+    PromptTemplateRead,
+    PromptVersionCreate,
+    PromptVersionRead,
     ProviderCreate,
     ProviderPatch,
     ProviderRead,
@@ -80,9 +89,286 @@ from app.services.domain import (
     reject_operation,
 )
 from app.services.domain import create_operation as create_operation_service
+from app.services.prompts import build_prompt, validate_prompt
 from app.services.transfer import decode_import_bytes, export_json, export_zip, import_project
 
 router = APIRouter(prefix="/api/v1")
+
+
+def _prompt_template_read(template: PromptTemplate) -> dict[str, object]:
+    return {
+        "id": template.id,
+        "project_id": template.project_id,
+        "scope": template.scope,
+        "owner_id": template.owner_id,
+        "name": template.name,
+        "enabled": template.enabled,
+        "active_version_id": template.active_version_id,
+        "created_at": template.created_at,
+        "updated_at": template.updated_at,
+    }
+
+
+def _validate_template_scope(data: PromptTemplateCreate | PromptTemplatePatch, db: Session) -> None:
+    scope = getattr(data, "scope", None)
+    if scope == "project" and not getattr(data, "project_id", None):
+        raise HTTPException(
+            422,
+            detail={
+                "code": "invalid_prompt_scope",
+                "message": "project prompt requires project_id",
+            },
+        )
+    if scope in {"agent", "workflow"} and not getattr(data, "owner_id", None):
+        raise HTTPException(
+            422,
+            detail={
+                "code": "invalid_prompt_scope",
+                "message": "scoped prompt requires owner_id",
+            },
+        )
+    project_id = getattr(data, "project_id", None)
+    if project_id and not db.get(Project, project_id):
+        raise HTTPException(
+            404, detail={"code": "project_not_found", "message": "project not found"}
+        )
+
+
+@router.post("/prompts", response_model=PromptTemplateRead, status_code=status.HTTP_201_CREATED)
+def create_prompt_template(data: PromptTemplateCreate, db: Session = Depends(get_db)):
+    _validate_template_scope(data, db)
+    variables = [item.model_dump() for item in data.variables]
+    validate_prompt(data.content, variables)
+    template = PromptTemplate(
+        scope=data.scope,
+        project_id=data.project_id,
+        owner_id=data.owner_id,
+        name=data.name,
+        enabled=data.enabled,
+    )
+    db.add(template)
+    db.flush()
+    version = PromptVersion(
+        template_id=template.id,
+        version=1,
+        content=data.content,
+        variables=variables,
+        created_by=data.created_by,
+    )
+    db.add(version)
+    db.flush()
+    template.active_version_id = version.id
+    db.commit()
+    db.refresh(template)
+    return _prompt_template_read(template)
+
+
+@router.get("/prompts", response_model=list[PromptTemplateRead])
+def list_prompt_templates(
+    project_id: str | None = None,
+    scope: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+):
+    query = select(PromptTemplate).order_by(
+        PromptTemplate.scope,
+        PromptTemplate.created_at,
+        PromptTemplate.id,
+    )
+    if project_id:
+        query = query.where(
+            (PromptTemplate.project_id == project_id)
+            | (PromptTemplate.project_id.is_(None))
+        )
+    if scope:
+        query = query.where(PromptTemplate.scope == scope)
+    return [_prompt_template_read(item) for item in db.scalars(query)]
+
+
+@router.post("/prompts/preview", response_model=PromptPreviewRead)
+def preview_prompt(data: PromptPreviewRequest, db: Session = Depends(get_db)):
+    get_project(db, data.project_id)
+    return build_prompt(
+        db,
+        data.project_id,
+        data.agent_id,
+        data.workflow_id,
+        data.session_prompt,
+        data.variables,
+    )
+
+
+@router.get("/prompts/{template_id}", response_model=PromptTemplateRead)
+def read_prompt_template(template_id: str, db: Session = Depends(get_db)):
+    template = db.get(PromptTemplate, template_id)
+    if not template:
+        raise HTTPException(
+            404,
+            detail={
+                "code": "prompt_not_found",
+                "message": "prompt template not found",
+            },
+        )
+    return _prompt_template_read(template)
+
+
+@router.patch("/prompts/{template_id}", response_model=PromptTemplateRead)
+def patch_prompt_template(
+    template_id: str, data: PromptTemplatePatch, db: Session = Depends(get_db)
+):
+    template = db.get(PromptTemplate, template_id)
+    if not template:
+        raise HTTPException(
+            404,
+            detail={
+                "code": "prompt_not_found",
+                "message": "prompt template not found",
+            },
+        )
+    values = data.model_dump(exclude_unset=True)
+    content = values.pop("content", None)
+    variables = values.pop("variables", None)
+    created_by = values.pop("created_by", None)
+    if "active_version_id" in values and values["active_version_id"]:
+        version_query = select(PromptVersion).where(
+            PromptVersion.id == values["active_version_id"],
+            PromptVersion.template_id == template.id,
+        )
+        if not db.scalar(version_query):
+            raise HTTPException(
+                422,
+                detail={
+                    "code": "invalid_prompt_version",
+                    "message": "version does not belong to template",
+                },
+            )
+    if content is not None:
+        variable_data = variables
+        if variable_data is None:
+            variable_data = template.versions[-1].variables if template.versions else []
+        validate_prompt(content, variable_data)
+        next_version = (
+            db.scalar(
+                select(func.max(PromptVersion.version)).where(
+                    PromptVersion.template_id == template.id
+                )
+            )
+            or 0
+        ) + 1
+        version = PromptVersion(
+            template_id=template.id,
+            version=next_version,
+            content=content,
+            variables=variable_data,
+            created_by=created_by,
+        )
+        db.add(version)
+        db.flush()
+        template.active_version_id = version.id
+    elif variables is not None:
+        current = template.versions[-1] if template.versions else None
+        if not current:
+            raise HTTPException(
+                422,
+                detail={
+                    "code": "invalid_prompt_version",
+                    "message": "template has no version",
+                },
+            )
+        validate_prompt(current.content, variables)
+        next_version = (
+            db.scalar(
+                select(func.max(PromptVersion.version)).where(
+                    PromptVersion.template_id == template.id
+                )
+            )
+            or 0
+        ) + 1
+        version = PromptVersion(
+            template_id=template.id,
+            version=next_version,
+            content=current.content,
+            variables=variables,
+            created_by=created_by,
+        )
+        db.add(version)
+        db.flush()
+        template.active_version_id = version.id
+    for key, value in values.items():
+        setattr(template, key, value)
+    db.commit()
+    db.refresh(template)
+    return _prompt_template_read(template)
+
+
+@router.delete("/prompts/{template_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_prompt_template(template_id: str, db: Session = Depends(get_db)):
+    template = db.get(PromptTemplate, template_id)
+    if not template:
+        raise HTTPException(
+            404,
+            detail={
+                "code": "prompt_not_found",
+                "message": "prompt template not found",
+            },
+        )
+    db.delete(template)
+    db.commit()
+
+
+@router.get("/prompts/{template_id}/versions", response_model=list[PromptVersionRead])
+def list_prompt_versions(template_id: str, db: Session = Depends(get_db)):
+    template = db.get(PromptTemplate, template_id)
+    if not template:
+        raise HTTPException(
+            404,
+            detail={
+                "code": "prompt_not_found",
+                "message": "prompt template not found",
+            },
+        )
+    return list(
+        db.scalars(
+            select(PromptVersion)
+            .where(PromptVersion.template_id == template_id)
+            .order_by(PromptVersion.version.desc())
+        )
+    )
+
+
+@router.post(
+    "/prompts/{template_id}/versions",
+    response_model=PromptVersionRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_prompt_version(
+    template_id: str, data: PromptVersionCreate, db: Session = Depends(get_db)
+):
+    template = db.get(PromptTemplate, template_id)
+    if not template:
+        raise HTTPException(
+            404, detail={"code": "prompt_not_found", "message": "prompt template not found"}
+        )
+    variables = [item.model_dump() for item in data.variables]
+    validate_prompt(data.content, variables)
+    next_version = (
+        db.scalar(
+            select(func.max(PromptVersion.version)).where(PromptVersion.template_id == template_id)
+        )
+        or 0
+    ) + 1
+    version = PromptVersion(
+        template_id=template_id,
+        version=next_version,
+        content=data.content,
+        variables=variables,
+        created_by=data.created_by,
+    )
+    db.add(version)
+    db.flush()
+    template.active_version_id = version.id
+    db.commit()
+    db.refresh(version)
+    return version
 
 
 def _provider_read(provider: Provider) -> dict[str, object]:
@@ -179,7 +465,16 @@ async def test_provider(provider_id: str, db: Session = Depends(get_db)):
 
 @router.post("/ai/sessions", response_model=AiSessionRead, status_code=status.HTTP_201_CREATED)
 def create_ai_session(data: AiSessionCreate, db: Session = Depends(get_db)):
-    return create_session(db, data.project_id, data.provider_id, data.model, data.system_prompt)
+    return create_session(
+        db,
+        data.project_id,
+        data.provider_id,
+        data.model,
+        data.system_prompt,
+        data.agent_id,
+        data.workflow_id,
+        data.prompt_variables,
+    )
 
 
 @router.get("/ai/sessions/{session_id}", response_model=AiSessionRead)

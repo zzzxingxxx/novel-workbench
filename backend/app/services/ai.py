@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.db.session import SessionLocal
 from app.models.domain import AiEvent, AiMessage, AiSession, Chapter, Provider, new_id
+from app.services.prompts import build_prompt
 
 
 class ChatProvider(Protocol):
@@ -160,6 +161,9 @@ def create_session(
     provider_id: str | None,
     model: str | None,
     system_prompt: str | None,
+    agent_id: str | None = None,
+    workflow_id: str | None = None,
+    prompt_variables: dict[str, Any] | None = None,
 ) -> AiSession:
     from app.services.domain import get_project
 
@@ -173,11 +177,25 @@ def create_session(
         raise HTTPException(
             409, detail={"code": "provider_disabled", "message": "provider is disabled"}
         )
+    rendered = build_prompt(
+        db,
+        project_id,
+        agent_id=agent_id,
+        workflow_id=workflow_id,
+        session_prompt=system_prompt,
+        variables=prompt_variables or {},
+    )
     session = AiSession(
         project_id=project_id,
         provider_id=provider_id,
         model=model or (provider.model if provider else None),
-        system_prompt=system_prompt,
+        system_prompt=rendered["prompt"],
+        agent_id=agent_id,
+        workflow_id=workflow_id,
+        prompt_variables=prompt_variables or {},
+        prompt_version_ids=rendered["version_ids"],
+        prompt_snapshot=rendered["sections"],
+        prompt_digest=rendered["digest"],
     )
     db.add(session)
     db.commit()
@@ -266,7 +284,12 @@ async def run_message(
             db,
             session_id,
             "session.started",
-            {"message_id": message_id, "model": session.model or provider.model},
+            {
+                "message_id": message_id,
+                "model": session.model or provider.model,
+                "prompt_version_ids": session.prompt_version_ids,
+                "prompt_digest": session.prompt_digest,
+            },
         )
         context_text = ""
         if chapter_id:

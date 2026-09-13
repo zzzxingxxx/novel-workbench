@@ -261,7 +261,7 @@ Windows 首发只实现 OpenAI-compatible；Anthropic-compatible、Gemini 和本
 越靠后的层级优先级越高，但不能绕过工具权限、隐私和写入审批规则。系统提示词编辑器必须提供：
 
 - Markdown 编辑和变量插入；
-- 可用变量列表，例如 `{{project.title}}`、`{{chapter.content}}`、`{{selected_text}}`；
+- 可用变量列表，例如 `{{project.name}}`、`{{chapter.content}}`、`{{selected_text}}`；
 - 启用/禁用和适用范围；
 - 版本历史、差异比较和恢复；
 - “查看本次实际提示词”预览；
@@ -403,7 +403,8 @@ POST   /api/v1/auth/logout
 POST   /api/v1/prompts
 GET    /api/v1/prompts
 GET    /api/v1/prompts/{id}/versions
-POST   /api/v1/prompts/{id}/preview
+POST   /api/v1/prompts/{id}/versions
+POST   /api/v1/prompts/preview
 POST   /api/v1/ai/sessions
 POST   /api/v1/ai/sessions/{id}/messages
 GET    /api/v1/ai/sessions/{id}/events

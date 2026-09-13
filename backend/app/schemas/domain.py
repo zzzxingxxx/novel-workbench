@@ -214,11 +214,98 @@ class ProviderRead(BaseModel):
     updated_at: datetime
 
 
+PromptScope = Literal["global", "project", "agent", "workflow", "session"]
+
+
+class PromptVariable(BaseModel):
+    name: str = Field(min_length=1, max_length=80)
+    type: Literal["string", "number", "boolean"] = "string"
+    required: bool = False
+
+
+class PromptTemplateCreate(BaseModel):
+    scope: PromptScope
+    project_id: str | None = None
+    owner_id: str | None = None
+    name: str = Field(min_length=1, max_length=160)
+    content: str = Field(min_length=1, max_length=100_000)
+    variables: list[PromptVariable] = Field(default_factory=list)
+    enabled: bool = True
+    created_by: str | None = Field(default=None, max_length=120)
+
+
+class PromptTemplatePatch(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=160)
+    enabled: bool | None = None
+    active_version_id: str | None = None
+    content: str | None = Field(default=None, min_length=1, max_length=100_000)
+    variables: list[PromptVariable] | None = None
+    created_by: str | None = Field(default=None, max_length=120)
+
+
+class PromptVersionCreate(BaseModel):
+    content: str = Field(min_length=1, max_length=100_000)
+    variables: list[PromptVariable] = Field(default_factory=list)
+    created_by: str | None = Field(default=None, max_length=120)
+
+
+class PromptVersionRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: str
+    template_id: str
+    version: int
+    content: str
+    variables: list[dict[str, Any]]
+    created_by: str | None
+    created_at: datetime
+
+
+class PromptTemplateRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: str
+    project_id: str | None
+    scope: PromptScope
+    owner_id: str | None
+    name: str
+    enabled: bool
+    active_version_id: str | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class PromptPreviewRequest(BaseModel):
+    project_id: str
+    agent_id: str | None = None
+    workflow_id: str | None = None
+    session_prompt: str | None = None
+    variables: dict[str, Any] = Field(default_factory=dict)
+
+
+class PromptPreviewSection(BaseModel):
+    scope: PromptScope
+    template_id: str | None
+    version_id: str | None
+    version: int | None
+    name: str
+    content: str
+
+
+class PromptPreviewRead(BaseModel):
+    prompt: str
+    version_ids: list[str]
+    sections: list[PromptPreviewSection]
+    estimated_tokens: int
+    digest: str
+
+
 class AiSessionCreate(BaseModel):
     project_id: str
     provider_id: str | None = None
     model: str | None = Field(default=None, max_length=200)
     system_prompt: str | None = None
+    agent_id: str | None = None
+    workflow_id: str | None = None
+    prompt_variables: dict[str, Any] = Field(default_factory=dict)
 
 
 class AiSessionRead(BaseModel):
@@ -229,6 +316,12 @@ class AiSessionRead(BaseModel):
     model: str | None
     status: str
     system_prompt: str | None
+    agent_id: str | None
+    workflow_id: str | None
+    prompt_variables: dict[str, Any]
+    prompt_version_ids: list[str]
+    prompt_snapshot: list[dict[str, Any]]
+    prompt_digest: str | None
     created_at: datetime
     updated_at: datetime
 

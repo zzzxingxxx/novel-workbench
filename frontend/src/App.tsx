@@ -38,6 +38,15 @@ type Volume = { id: string; title: string; position: number; chapters: Chapter[]
 type Project = { id: string; name: string; description?: string | null; language: string }
 type TreeResponse = { project: Project; volumes: Volume[] }
 type Provider = { id: string; name: string; base_url: string; model: string; enabled: boolean }
+type PromptTemplate = {
+  id: string
+  project_id: string | null
+  scope: 'global' | 'project' | 'agent' | 'workflow' | 'session'
+  owner_id: string | null
+  name: string
+  enabled: boolean
+  active_version_id: string | null
+}
 
 const demoTree: TreeResponse = {
   project: { id: 'demo-project', name: '潮汐之上', description: '一部关于记忆、航海与重逢的长篇小说。', language: 'zh-CN' },
@@ -96,6 +105,12 @@ function App() {
   const eventSourceRef = useRef<EventSource | null>(null)
   const [selectedText, setSelectedText] = useState('')
   const [pendingOperationId, setPendingOperationId] = useState<string | null>(null)
+  const [promptOpen, setPromptOpen] = useState(false)
+  const [promptTemplates, setPromptTemplates] = useState<PromptTemplate[]>([])
+  const [promptSelected, setPromptSelected] = useState<PromptTemplate | null>(null)
+  const [promptDraft, setPromptDraft] = useState('')
+  const [promptPreview, setPromptPreview] = useState('')
+  const [promptBusy, setPromptBusy] = useState(false)
 
   const selectedChapter = useMemo(
     () => tree.volumes.flatMap((volume) => volume.chapters).find((chapter) => chapter.id === selectedId),
@@ -201,6 +216,99 @@ function App() {
 
   const sendAssistant = () => {
     void sendAssistantMessage()
+  }
+
+  const openPromptManager = async () => {
+    setPromptOpen(true)
+    try {
+      const templates = await api<PromptTemplate[]>(`/api/v1/prompts?project_id=${tree.project.id}`)
+      setPromptTemplates(templates)
+      const first = templates.find((item) => item.scope === 'project') ?? templates[0]
+      if (first) {
+        setPromptSelected(first)
+        const versions = await api<Array<{ content: string }>>(`/api/v1/prompts/${first.id}/versions`)
+        setPromptDraft(versions[0]?.content ?? '')
+      }
+    } catch {
+      setNotice('提示词服务暂不可用')
+    }
+  }
+
+  const selectPrompt = async (template: PromptTemplate) => {
+    setPromptSelected(template)
+    try {
+      const versions = await api<Array<{ content: string }>>(`/api/v1/prompts/${template.id}/versions`)
+      setPromptDraft(versions[0]?.content ?? '')
+    } catch {
+      setNotice('无法读取提示词版本')
+    }
+  }
+
+  const createProjectPrompt = async () => {
+    try {
+      const created = await api<PromptTemplate>('/api/v1/prompts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          scope: 'project',
+          project_id: tree.project.id,
+          name: '项目写作规则',
+          content: '围绕《{{project.name}}》的设定进行创作，保持人物和世界观一致。',
+          variables: [{ name: 'project.name', required: true }],
+        }),
+      })
+      setPromptTemplates((items) => [...items, created])
+      setPromptSelected(created)
+      setPromptDraft('围绕《{{project.name}}》的设定进行创作，保持人物和世界观一致。')
+    } catch {
+      setNotice('提示词创建失败')
+    }
+  }
+
+  const savePrompt = async () => {
+    if (!promptSelected || !promptDraft.trim()) return
+    setPromptBusy(true)
+    try {
+      const updated = await api<PromptTemplate>(`/api/v1/prompts/${promptSelected.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content: promptDraft }),
+      })
+      setPromptSelected(updated)
+      setPromptTemplates((items) => items.map((item) => item.id === updated.id ? updated : item))
+      setNotice('提示词已保存为新版本')
+    } catch {
+      setNotice('提示词保存失败')
+    } finally {
+      setPromptBusy(false)
+    }
+  }
+
+  const togglePrompt = async (template: PromptTemplate) => {
+    try {
+      const updated = await api<PromptTemplate>(`/api/v1/prompts/${template.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled: !template.enabled }),
+      })
+      setPromptTemplates((items) => items.map((item) => item.id === updated.id ? updated : item))
+      if (promptSelected?.id === updated.id) setPromptSelected(updated)
+    } catch {
+      setNotice('提示词状态更新失败')
+    }
+  }
+
+  const previewCurrentPrompt = async () => {
+    try {
+      const result = await api<{ prompt: string }>('/api/v1/prompts/preview', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ project_id: tree.project.id, session_prompt: promptDraft }),
+      })
+      setPromptPreview(result.prompt)
+    } catch {
+      setNotice('提示词预览失败，请检查变量')
+    }
   }
 
   const cancelAssistant = async () => {
@@ -315,7 +423,7 @@ function App() {
         <div className="top-actions">
           <div className={`save-indicator ${saveState}`}><span className="status-dot" />{saveState === 'saved' ? '已保存' : saveState === 'saving' ? '保存中' : saveState === 'offline' ? '本地草稿' : '未保存'}</div>
           <button className="icon-button" title="搜索"><Search size={17} /></button>
-          <button className="icon-button" title="设置"><Settings2 size={17} /></button>
+          <button className="icon-button" title="系统提示词" onClick={() => void openPromptManager()}><Settings2 size={17} /></button>
           <div className="avatar">LM</div>
         </div>
       </header>
@@ -360,6 +468,15 @@ function App() {
           </> : <div className="history-panel"><div className="history-intro"><History size={17} /><div><strong>版本时间线</strong><p>每次审批都会生成一个可恢复版本。</p></div></div><div className="history-item current"><span className="history-dot" /><div><strong>当前草稿</strong><span>今天 04:17 · {wordCount} 字</span></div><MoreHorizontal size={15} /></div><div className="history-item"><span className="history-dot" /><div><strong>初始版本</strong><span>今天 03:52 · 1,280 字</span></div><MoreHorizontal size={15} /></div><button className="history-close" onClick={() => setAssistantTab('assistant')}><X size={14} />返回助手</button></div>}
         </aside>
       </div>
+      {promptOpen && <div className="prompt-overlay" role="dialog" aria-modal="true" aria-label="系统提示词管理">
+        <div className="prompt-panel">
+          <div className="prompt-panel-head"><div><span className="eyebrow">AI 配置</span><h2>系统提示词</h2></div><button className="icon-button" title="关闭" onClick={() => setPromptOpen(false)}><X size={17} /></button></div>
+          <div className="prompt-panel-body">
+            <div className="prompt-list"><div className="prompt-list-title"><span className="context-label">已配置模板</span><button className="icon-button subtle" title="新建项目提示词" onClick={() => void createProjectPrompt()}><Plus size={15} /></button></div>{promptTemplates.length === 0 && <p className="prompt-empty">暂无模板，点击加号创建项目规则。</p>}{promptTemplates.map((template) => <button key={template.id} className={`prompt-list-item ${promptSelected?.id === template.id ? 'selected' : ''}`} onClick={() => void selectPrompt(template)}><span><strong>{template.name}</strong><small>{template.scope}</small></span><span className={`prompt-state ${template.enabled ? 'on' : ''}`} onClick={(event) => { event.stopPropagation(); void togglePrompt(template) }}>{template.enabled ? '启用' : '停用'}</span></button>)}</div>
+            <div className="prompt-editor"><label>模板正文<textarea value={promptDraft} onChange={(event) => setPromptDraft(event.target.value)} placeholder="例如：你是一个严谨的写作助手。支持 {{project.name}} 等白名单变量。" /></label><div className="prompt-hint">可用变量：project.name、project.description、chapter.title、chapter.content、selected_text、user.instruction、session.prompt</div><div className="prompt-actions"><button className="tool-button" onClick={() => void previewCurrentPrompt()}><Search size={14} />预览最终 Prompt</button><button className="tool-button save-button" disabled={promptBusy || !promptSelected} onClick={() => void savePrompt()}><Save size={14} />保存新版本</button></div>{promptPreview && <pre className="prompt-preview">{promptPreview}</pre>}</div>
+          </div>
+        </div>
+      </div>}
       {notice && <button className="toast" onClick={() => setNotice('')}>{notice}<X size={14} /></button>}
       <button className="mobile-menu" title="菜单"><Menu size={18} /></button>
     </div>

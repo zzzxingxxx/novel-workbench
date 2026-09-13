@@ -63,3 +63,22 @@ the persisted stream at `GET /api/v1/ai/sessions/{session_id}/events`. SSE `id` 
 session-scoped, and a `Last-Event-ID` header or `last_event_id` query resumes from that sequence.
 AI output only creates a pending operation preview; it never changes chapter content until the
 existing approve endpoint is called.
+
+## Stage 4 system prompts
+
+System prompts are managed as versioned templates through `/api/v1/prompts`. Templates support
+the scopes `global`, `project`, `agent`, and `workflow`; a session-only prompt is appended at
+runtime. Enabled templates are merged in that order, followed by the session prompt and a fixed
+untrusted-data boundary. Project name and description are supplied automatically; other values
+must be passed through the variable map.
+
+Create a template with `POST /api/v1/prompts`, add immutable versions with
+`POST /api/v1/prompts/{id}/versions`, or update content through `PATCH /api/v1/prompts/{id}`.
+Use `POST /api/v1/prompts/preview` to inspect the rendered prompt, version IDs, SHA-256 digest,
+sections, and an approximate token count before creating an AI session. Only the following
+variables are accepted: `project.name`, `project.description`, `chapter.title`,
+`chapter.content`, `selected_text`, `user.instruction`, and `session.prompt`.
+
+Creating an AI session renders and freezes the prompt. `AiSessionRead` exposes the final prompt,
+the selected version IDs, section snapshot, variables, and digest, so later template changes do
+not alter historical calls. API keys and secret-like fields are rejected from prompt content.

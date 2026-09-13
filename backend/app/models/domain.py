@@ -203,6 +203,56 @@ class Provider(Base):
     )
 
 
+class PromptTemplate(Base):
+    __tablename__ = "prompt_templates"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    project_id: Mapped[str | None] = mapped_column(
+        ForeignKey("projects.id", ondelete="CASCADE"), index=True
+    )
+    scope: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
+    owner_id: Mapped[str | None] = mapped_column(String(36), index=True)
+    name: Mapped[str] = mapped_column(String(160), nullable=False)
+    enabled: Mapped[bool] = mapped_column(default=True, nullable=False)
+    active_version_id: Mapped[str | None] = mapped_column(
+        ForeignKey("prompt_versions.id", ondelete="SET NULL", use_alter=True), index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
+    )
+
+    versions: Mapped[list[PromptVersion]] = relationship(
+        back_populates="template",
+        foreign_keys="PromptVersion.template_id",
+        cascade="all, delete-orphan",
+        order_by="PromptVersion.version",
+    )
+
+
+class PromptVersion(Base):
+    __tablename__ = "prompt_versions"
+    __table_args__ = (UniqueConstraint("template_id", "version", name="uq_prompt_version"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    template_id: Mapped[str] = mapped_column(
+        ForeignKey("prompt_templates.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    variables: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list, nullable=False)
+    created_by: Mapped[str | None] = mapped_column(String(120))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, nullable=False
+    )
+
+    template: Mapped[PromptTemplate] = relationship(
+        back_populates="versions", foreign_keys=[template_id]
+    )
+
+
 class AiSession(Base):
     __tablename__ = "ai_sessions"
 
@@ -216,6 +266,14 @@ class AiSession(Base):
     model: Mapped[str | None] = mapped_column(String(200))
     status: Mapped[str] = mapped_column(String(30), default="idle", nullable=False, index=True)
     system_prompt: Mapped[str | None] = mapped_column(Text)
+    agent_id: Mapped[str | None] = mapped_column(String(36), index=True)
+    workflow_id: Mapped[str | None] = mapped_column(String(36), index=True)
+    prompt_variables: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
+    prompt_version_ids: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
+    prompt_snapshot: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSON, default=list, nullable=False
+    )
+    prompt_digest: Mapped[str | None] = mapped_column(String(64), index=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, nullable=False
     )
