@@ -1,0 +1,28 @@
+"""initial domain model"""
+from alembic import op
+import sqlalchemy as sa
+
+revision = "0001_initial"
+down_revision = None
+branch_labels = None
+depends_on = None
+
+
+def upgrade() -> None:
+    op.create_table("projects", sa.Column("id", sa.String(36), primary_key=True), sa.Column("name", sa.String(200), nullable=False), sa.Column("description", sa.Text()), sa.Column("language", sa.String(20), nullable=False), sa.Column("status", sa.String(30), nullable=False), sa.Column("created_at", sa.DateTime(timezone=True), nullable=False), sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False))
+    op.create_table("volumes", sa.Column("id", sa.String(36), primary_key=True), sa.Column("project_id", sa.String(36), sa.ForeignKey("projects.id", ondelete="CASCADE"), nullable=False), sa.Column("title", sa.String(200), nullable=False), sa.Column("position", sa.Integer(), nullable=False), sa.Column("created_at", sa.DateTime(timezone=True), nullable=False), sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False), sa.UniqueConstraint("project_id", "position", name="uq_volume_project_position"))
+    op.create_index("ix_volumes_project_id", "volumes", ["project_id"])
+    op.create_table("chapters", sa.Column("id", sa.String(36), primary_key=True), sa.Column("volume_id", sa.String(36), sa.ForeignKey("volumes.id", ondelete="CASCADE"), nullable=False), sa.Column("title", sa.String(200), nullable=False), sa.Column("position", sa.Integer(), nullable=False), sa.Column("status", sa.String(30), nullable=False), sa.Column("content", sa.Text(), nullable=False), sa.Column("content_hash", sa.String(64), nullable=False), sa.Column("word_count", sa.Integer(), nullable=False), sa.Column("created_at", sa.DateTime(timezone=True), nullable=False), sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False), sa.UniqueConstraint("volume_id", "position", name="uq_chapter_volume_position"))
+    op.create_index("ix_chapters_volume_id", "chapters", ["volume_id"]); op.create_index("ix_chapters_content_hash", "chapters", ["content_hash"])
+    op.create_table("revisions", sa.Column("id", sa.String(36), primary_key=True), sa.Column("chapter_id", sa.String(36), sa.ForeignKey("chapters.id", ondelete="CASCADE"), nullable=False), sa.Column("parent_id", sa.String(36), sa.ForeignKey("revisions.id", ondelete="SET NULL")), sa.Column("content", sa.Text(), nullable=False), sa.Column("content_hash", sa.String(64), nullable=False), sa.Column("source", sa.String(30), nullable=False), sa.Column("operation_id", sa.String(36)), sa.Column("created_at", sa.DateTime(timezone=True), nullable=False))
+    op.create_index("ix_revisions_chapter_id", "revisions", ["chapter_id"]); op.create_index("ix_revisions_content_hash", "revisions", ["content_hash"]); op.create_index("ix_revisions_operation_id", "revisions", ["operation_id"])
+    op.create_table("entities", sa.Column("id", sa.String(36), primary_key=True), sa.Column("project_id", sa.String(36), sa.ForeignKey("projects.id", ondelete="CASCADE"), nullable=False), sa.Column("kind", sa.String(30), nullable=False), sa.Column("name", sa.String(200), nullable=False), sa.Column("aliases", sa.JSON(), nullable=False), sa.Column("description", sa.Text(), nullable=False), sa.Column("attributes", sa.JSON(), nullable=False), sa.Column("status", sa.String(30), nullable=False), sa.Column("created_at", sa.DateTime(timezone=True), nullable=False), sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False))
+    op.create_index("ix_entities_project_id", "entities", ["project_id"])
+    op.create_table("notes", sa.Column("id", sa.String(36), primary_key=True), sa.Column("project_id", sa.String(36), sa.ForeignKey("projects.id", ondelete="CASCADE"), nullable=False), sa.Column("title", sa.String(200), nullable=False), sa.Column("content", sa.Text(), nullable=False), sa.Column("tags", sa.JSON(), nullable=False), sa.Column("created_at", sa.DateTime(timezone=True), nullable=False), sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False))
+    op.create_index("ix_notes_project_id", "notes", ["project_id"])
+    op.create_table("operations", sa.Column("id", sa.String(36), primary_key=True), sa.Column("project_id", sa.String(36), sa.ForeignKey("projects.id", ondelete="CASCADE"), nullable=False), sa.Column("target_type", sa.String(30), nullable=False), sa.Column("target_id", sa.String(36), nullable=False), sa.Column("type", sa.String(50), nullable=False), sa.Column("payload", sa.JSON(), nullable=False), sa.Column("old_hash", sa.String(64)), sa.Column("status", sa.String(30), nullable=False), sa.Column("source", sa.String(30), nullable=False), sa.Column("idempotency_key", sa.String(200), unique=True), sa.Column("created_at", sa.DateTime(timezone=True), nullable=False), sa.Column("applied_at", sa.DateTime(timezone=True)))
+    op.create_index("ix_operations_project_id", "operations", ["project_id"]); op.create_index("ix_operations_target_id", "operations", ["target_id"]); op.create_index("ix_operations_status", "operations", ["status"])
+
+
+def downgrade() -> None:
+    op.drop_table("operations"); op.drop_index("ix_notes_project_id", table_name="notes"); op.drop_table("notes"); op.drop_index("ix_entities_project_id", table_name="entities"); op.drop_table("entities"); op.drop_index("ix_revisions_operation_id", table_name="revisions"); op.drop_index("ix_revisions_content_hash", table_name="revisions"); op.drop_index("ix_revisions_chapter_id", table_name="revisions"); op.drop_table("revisions"); op.drop_index("ix_chapters_content_hash", table_name="chapters"); op.drop_index("ix_chapters_volume_id", table_name="chapters"); op.drop_table("chapters"); op.drop_index("ix_volumes_project_id", table_name="volumes"); op.drop_table("volumes"); op.drop_table("projects")
