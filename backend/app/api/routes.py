@@ -1,5 +1,6 @@
 import asyncio
 import json
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from fastapi import (
@@ -15,6 +16,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.config import settings
 from app.db.session import SessionLocal, get_db
 from app.models.domain import (
     AiEvent,
@@ -35,6 +37,7 @@ from app.models.domain import (
     PromptTemplate,
     PromptVersion,
     Provider,
+    RequestMetric,
     Revision,
     StoryBranch,
     TimelineEvent,
@@ -148,6 +151,26 @@ from app.services.transfer import (
 )
 
 router = APIRouter(prefix="/api/v1")
+
+
+@router.get("/auth/session")
+def auth_session(request: Request):
+    return {
+        "mode": "token" if settings.local_token else "open",
+        "authenticated": not settings.local_token
+        or request.headers.get("x-novel-workbench-token") == settings.local_token,
+    }
+
+
+@router.post("/auth/unlock")
+def auth_unlock(request: Request, data: dict[str, str] | None = None):
+    supplied = (data or {}).get("token") or request.headers.get("x-novel-workbench-token", "")
+    valid = not settings.local_token or supplied == settings.local_token
+    if not valid:
+        raise HTTPException(
+            401, detail={"code": "invalid_local_token", "message": "invalid local access token"}
+        )
+    return {"authenticated": True, "mode": "token" if settings.local_token else "open"}
 
 
 def _prompt_template_read(template: PromptTemplate) -> dict[str, object]:
@@ -1540,4 +1563,66 @@ def list_foreshadow_links(foreshadow_id: str, db: Session = Depends(get_db)):
             .where(ForeshadowLink.foreshadow_id == foreshadow_id)
             .order_by(ForeshadowLink.created_at)
         )
+    )
+
+
+@router.get("/diagnostics/summary")
+def diagnostics_summary(db: Session = Depends(get_db)):
+    cutoff = datetime.now(timezone.utc) - timedelta(days=settings.diagnostics_retention_days)
+    db.query(RequestMetric).filter(RequestMetric.created_at < cutoff).delete(
+        synchronize_session=False
+    )
+    db.commit()
+    total = db.scalar(select(func.count()).select_from(RequestMetric)) or 0
+    errors = (
+        db.scalar(
+            select(func.count()).select_from(RequestMetric).where(RequestMetric.status_code >= 400)
+        )
+        or 0
+    )
+    average = db.scalar(select(func.avg(RequestMetric.latency_ms))) or 0
+    p95_sample = list(
+        db.scalars(
+            select(RequestMetric.latency_ms)
+            .order_by(RequestMetric.latency_ms.desc())
+            .limit(max(1, round(total * 0.05)))
+        )
+    )
+    p95 = p95_sample[-1] if p95_sample else 0
+    return {
+        "retention_days": settings.diagnostics_retention_days,
+        "requests": total,
+        "errors": errors,
+        "error_rate": round(errors / total, 4) if total else 0,
+        "latency_ms": {"avg": round(average), "p95_sample": p95},
+        "telemetry": "disabled",
+    }
+
+
+@router.get("/diagnostics/export")
+def export_diagnostics(db: Session = Depends(get_db)):
+    rows = list(
+        db.scalars(select(RequestMetric).order_by(RequestMetric.created_at.desc()).limit(1000))
+    )
+    payload = {
+        "schema_version": "1.0",
+        "exported_at": datetime.now(timezone.utc).isoformat(),
+        "telemetry": "disabled",
+        "requests": [
+            {
+                "request_id": item.request_id,
+                "method": item.method,
+                "path": item.path,
+                "status_code": item.status_code,
+                "latency_ms": item.latency_ms,
+                "error_code": item.error_code,
+                "created_at": item.created_at.isoformat(),
+            }
+            for item in rows
+        ],
+    }
+    return Response(
+        json.dumps(payload, ensure_ascii=False, indent=2),
+        media_type="application/json",
+        headers={"Content-Disposition": 'attachment; filename="novel-workbench-diagnostics.json"'},
     )

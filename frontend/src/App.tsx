@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
+  Activity,
   BookOpen,
   ChevronDown,
   ChevronRight,
@@ -147,6 +148,8 @@ function App() {
   const [transferOpen, setTransferOpen] = useState(false)
   const [transferBusy, setTransferBusy] = useState(false)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
+  const [diagnosticsOpen, setDiagnosticsOpen] = useState(false)
+  const [diagnostics, setDiagnostics] = useState<{ requests: number; errors: number; error_rate: number; latency_ms: { avg: number; p95_sample: number }; telemetry: string } | null>(null)
 
   const selectedChapter = useMemo(
     () => tree.volumes.flatMap((volume) => volume.chapters).find((chapter) => chapter.id === selectedId),
@@ -209,6 +212,32 @@ function App() {
     } finally {
       setTransferBusy(false)
       if (fileInputRef.current) fileInputRef.current.value = ''
+    }
+  }
+
+  const openDiagnostics = async () => {
+    setDiagnosticsOpen(true)
+    try {
+      setDiagnostics(await api<typeof diagnostics>('/api/v1/diagnostics/summary'))
+    } catch {
+      setNotice('诊断数据暂时不可用')
+    }
+  }
+
+  const downloadDiagnostics = async () => {
+    try {
+      const response = await fetch('/api/v1/diagnostics/export')
+      if (!response.ok) throw new Error(`API ${response.status}`)
+      const blob = await response.blob()
+      const url = URL.createObjectURL(blob)
+      const anchor = document.createElement('a')
+      anchor.href = url
+      anchor.download = 'novel-workbench-diagnostics.json'
+      anchor.click()
+      URL.revokeObjectURL(url)
+      setNotice('诊断报告已开始下载')
+    } catch {
+      setNotice('诊断报告导出失败')
     }
   }
 
@@ -552,6 +581,7 @@ function App() {
           <button className="icon-button" title="搜索" onClick={() => setSearchOpen(true)}><Search size={17} /></button>
           <button className="icon-button" title="资料库" onClick={() => void openLore()}><BookOpen size={17} /></button>
           <button className="icon-button" title="导入导出" onClick={() => setTransferOpen(true)}><Download size={17} /></button>
+          <button className="icon-button" title="诊断" onClick={() => void openDiagnostics()}><Activity size={17} /></button>
           <button className="icon-button" title="系统提示词" onClick={() => void openPromptManager()}><Settings2 size={17} /></button>
           <div className="avatar">LM</div>
         </div>
@@ -609,6 +639,7 @@ function App() {
       </div>}
       {loreOpen && <div className="prompt-overlay" role="dialog" aria-modal="true" aria-label="资料库"><div className="prompt-panel lore-panel"><div className="prompt-panel-head"><div><span className="eyebrow">故事资料</span><h2>资料库</h2></div><button className="icon-button" title="关闭" onClick={() => setLoreOpen(false)}><X size={17} /></button></div><div className="lore-tabs">{([['entities', '实体'], ['timeline', '时间线'], ['branches', '分支'], ['foreshadows', '伏笔']] as const).map(([key, label]) => <button key={key} className={loreTab === key ? 'active' : ''} onClick={() => setLoreTab(key)}>{label}</button>)}</div><div className="lore-list">{loreTab === 'entities' && (loreData.entities.length ? loreData.entities.map((item) => <div className="lore-item" key={item.id}><strong>{item.name}</strong><span>{item.kind} · {item.status}</span><p>{item.description || '暂无描述'}{item.aliases?.length ? ` · 别名：${item.aliases.join('、')}` : ''}</p></div>) : <p className="prompt-empty">暂无实体。创建角色、地点或规则后会显示在这里。</p>)}{loreTab === 'timeline' && (loreData.timeline.length ? loreData.timeline.map((item) => <div className="lore-item" key={item.id}><strong>{item.title}</strong><span>{item.time_status} · {item.absolute_time || (item.relative_order == null ? '时间未知' : `顺序 ${item.relative_order}`)}</span></div>) : <p className="prompt-empty">暂无时间线事件。</p>)}{loreTab === 'branches' && (loreData.branches.length ? loreData.branches.map((item) => <div className="lore-item" key={item.id}><strong>{item.name}</strong><span>{item.status}</span><p>{item.trigger_condition || '未设置触发条件'}</p></div>) : <p className="prompt-empty">暂无剧情分支。</p>)}{loreTab === 'foreshadows' && (loreData.foreshadows.length ? loreData.foreshadows.map((item) => <div className="lore-item" key={item.id}><strong>{item.title}</strong><span>{item.status}</span><p>{item.description || '暂无描述'}</p></div>) : <p className="prompt-empty">暂无伏笔。</p>)}</div></div></div>}
       {transferOpen && <div className="prompt-overlay" role="dialog" aria-modal="true" aria-label="导入导出"><div className="prompt-panel transfer-panel"><div className="prompt-panel-head"><div><span className="eyebrow">项目迁移</span><h2>导入 / 导出</h2></div><button className="icon-button" title="关闭" onClick={() => setTransferOpen(false)}><X size={17} /></button></div><div className="transfer-body"><div className="transfer-section"><span className="context-label">导出当前作品</span><div className="transfer-grid"><button className="transfer-action" disabled={transferBusy} onClick={() => void downloadExport('json')}><Download size={15} /><span>JSON 备份</span><small>完整数据</small></button><button className="transfer-action" disabled={transferBusy} onClick={() => void downloadExport('zip')}><Download size={15} /><span>ZIP 项目包</span><small>含校验和</small></button><button className="transfer-action" disabled={transferBusy} onClick={() => void downloadExport('markdown')}><Download size={15} /><span>Markdown</span><small>文件夹结构</small></button><button className="transfer-action" disabled={transferBusy} onClick={() => void downloadExport('docx')}><Download size={15} /><span>DOCX</span><small>文档格式</small></button><button className="transfer-action" disabled={transferBusy} onClick={() => void downloadExport('epub')}><Download size={15} /><span>EPUB</span><small>电子书格式</small></button></div></div><div className="transfer-section transfer-import"><span className="context-label">导入备份或 Markdown 包</span><input ref={fileInputRef} className="transfer-file" type="file" accept=".json,.zip,.md,application/json,application/zip,text/markdown" onChange={(event) => { const file = event.target.files?.[0]; if (file) void importBackup(file) }} /><button className="transfer-upload" disabled={transferBusy} onClick={() => fileInputRef.current?.click()}><Upload size={16} />选择文件</button><p>支持 JSON、ZIP 和 Markdown 文件。导入会创建一个独立作品。</p></div></div></div></div>}
+      {diagnosticsOpen && <div className="prompt-overlay" role="dialog" aria-modal="true" aria-label="诊断与性能"><div className="prompt-panel diagnostics-panel"><div className="prompt-panel-head"><div><span className="eyebrow">本地运行状态</span><h2>诊断与性能</h2></div><button className="icon-button" title="关闭" onClick={() => setDiagnosticsOpen(false)}><X size={17} /></button></div><div className="diagnostics-body">{diagnostics ? <><div className="diagnostics-grid"><div><span>请求总数</span><strong>{diagnostics.requests}</strong></div><div><span>错误率</span><strong>{(diagnostics.error_rate * 100).toFixed(1)}%</strong></div><div><span>平均延迟</span><strong>{diagnostics.latency_ms.avg} ms</strong></div><div><span>p95 采样</span><strong>{diagnostics.latency_ms.p95_sample} ms</strong></div></div><div className="diagnostics-note"><Activity size={15} /><span>遥测：{diagnostics.telemetry === 'disabled' ? '已关闭' : diagnostics.telemetry}</span></div><button className="transfer-upload" onClick={() => void downloadDiagnostics()}><Download size={15} />导出脱敏报告</button><p className="diagnostics-help">报告仅包含请求路径、状态、耗时和错误码，不包含正文、提示词、API Key 或请求参数。</p></> : <p className="prompt-empty">正在读取本地诊断数据…</p>}</div></div></div>}
       {notice && <button className="toast" onClick={() => setNotice('')}>{notice}<X size={14} /></button>}
       <button className="mobile-menu" title="菜单"><Menu size={18} /></button>
     </div>

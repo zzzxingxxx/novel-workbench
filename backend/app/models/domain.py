@@ -306,6 +306,9 @@ class AiMessage(Base):
     idempotency_key: Mapped[str | None] = mapped_column(String(200), unique=True)
     prompt_tokens: Mapped[int | None] = mapped_column(Integer)
     completion_tokens: Mapped[int | None] = mapped_column(Integer)
+    latency_ms: Mapped[int | None] = mapped_column(Integer)
+    provider_id_used: Mapped[str | None] = mapped_column(String(36), index=True)
+    model_used: Mapped[str | None] = mapped_column(String(200))
     context_package: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
     context_digest: Mapped[str | None] = mapped_column(String(64), index=True)
     context_tokens: Mapped[int | None] = mapped_column(Integer)
@@ -517,4 +520,19 @@ class EvaluationRun(Base):
     metrics: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, nullable=False
+    )
+
+
+class RequestMetric(Base):
+    __tablename__ = "request_metrics"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    request_id: Mapped[str] = mapped_column(String(36), nullable=False, unique=True, index=True)
+    method: Mapped[str] = mapped_column(String(10), nullable=False)
+    path: Mapped[str] = mapped_column(String(300), nullable=False, index=True)
+    status_code: Mapped[int] = mapped_column(Integer, nullable=False)
+    latency_ms: Mapped[int] = mapped_column(Integer, nullable=False)
+    error_code: Mapped[str | None] = mapped_column(String(80))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, nullable=False, index=True
     )

@@ -470,6 +470,15 @@ input → context → llm → parser → approval? → operation → output
 
 阶段 10 验收结果：后端 27 项测试通过；`0007_jobs_evaluation` 迁移可升级、降级后再升级；前端 TypeScript/Vite 构建通过。导出包不包含 API Key、Provider 密文、AI 会话或消息正文快照之外的运行凭据。
 
+## 阶段 11 实现状态（安全、性能和可观测性）
+
+- 默认继续只服务 localhost；设置 `NOVEL_WORKBENCH_LOCAL_TOKEN` 后，除健康检查、文档和认证入口外的 `/api/v1` 请求必须携带 `X-Novel-Workbench-Token`，使用常量时间比较，避免把令牌写入 URL 或日志。
+- CORS 由 `NOVEL_WORKBENCH_CORS_ORIGINS` 显式配置，默认空 allowlist；不会使用通配符和凭据跨域。
+- 每个请求生成或透传 `X-Request-ID`，响应携带同一 ID；SQLite `request_metrics` 只保存方法、路径、状态、错误码、耗时和时间，不保存正文、Prompt、Query 参数或密钥。
+- `GET /api/v1/diagnostics/summary` 提供请求数、错误率、平均延迟、p95 采样值和遥测状态；`GET /api/v1/diagnostics/export` 导出最近 1000 条脱敏诊断记录，默认遥测关闭并按保留天数清理。
+- AI 消息记录实际 Provider、模型和端到端耗时，结合已有 token 字段和 `provider.fallback` 事件可回溯外部调用性能。
+- 新增迁移 `0008_observability`；阶段 11 回归覆盖请求 ID、诊断脱敏、令牌保护、迁移和现有 AI/检索路径。
+
 ## 16. 安全、性能和可观测性（第 16 周）
 
 ### 16.1 安全检查

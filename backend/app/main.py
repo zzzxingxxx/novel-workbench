@@ -1,13 +1,26 @@
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy.exc import IntegrityError
 
 from app.api.routes import router
+from app.config import settings
+from app.observability import RequestObservabilityMiddleware
 
 app = FastAPI(title="Novel Workbench API", version="0.1.0")
 app.include_router(router)
+
+origins = [item.strip() for item in settings.cors_origins.split(",") if item.strip()]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Content-Type", "X-Novel-Workbench-Token", "X-Request-ID", "Last-Event-ID"],
+)
+app.add_middleware(RequestObservabilityMiddleware)
 
 
 @app.exception_handler(HTTPException)

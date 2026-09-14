@@ -276,6 +276,7 @@ async def run_message(
     _cancel_events[session_id] = cancel_event
     _session_loops[session_id] = asyncio.get_running_loop()
     try:
+        started_at = time.perf_counter()
         session = db.get(AiSession, session_id)
         message = db.get(AiMessage, message_id)
         if not session or not message:
@@ -372,6 +373,9 @@ async def run_message(
         answer = "".join(chunks)
         message.prompt_tokens = max(1, len(prompt) // 4)
         message.completion_tokens = max(1, len(answer) // 4) if answer else 0
+        message.latency_ms = round((time.perf_counter() - started_at) * 1000)
+        message.provider_id_used = actual_provider.id
+        message.model_used = session.model or actual_provider.model
         assistant_message = AiMessage(
             session_id=session_id,
             role="assistant",

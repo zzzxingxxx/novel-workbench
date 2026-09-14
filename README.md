@@ -16,6 +16,7 @@ This initial implementation covers project initialization and the first domain/d
 - Markdown folder packages, attachment/file checksums, schema 1.0 to 1.1 migration, and story graph backup/restore
 - Optional paginated list responses (`?page=1&page_size=20`) with stable ordering
 - Unified error responses (`{"error": {"code", "message", "details"}}`)
+- Optional localhost token protection, explicit CORS allowlist, request IDs, redacted diagnostics, and AI latency/provider metrics
 
 ## Development
 
@@ -36,6 +37,12 @@ uv run pytest
 ```
 
 The default database is `backend/data/novel_workbench.db`. Set `NOVEL_WORKBENCH_DATABASE_URL` to use another SQLite path.
+Set `NOVEL_WORKBENCH_LOCAL_TOKEN` to require `X-Novel-Workbench-Token` on API requests. Set
+`NOVEL_WORKBENCH_CORS_ORIGINS` to a comma-separated explicit browser origin allowlist.
+
+Diagnostics are local by default and contain only normalized paths, status codes, error codes,
+request IDs, and latency. Use `GET /api/v1/diagnostics/summary` for a compact health view or
+`GET /api/v1/diagnostics/export` to download a redacted JSON report.
 
 ## Stage 1 API notes
 

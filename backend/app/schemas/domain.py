@@ -499,6 +499,9 @@ class AiMessageRead(BaseModel):
     status: str
     prompt_tokens: int | None
     completion_tokens: int | None
+    latency_ms: int | None
+    provider_id_used: str | None
+    model_used: str | None
     context_package: dict[str, Any]
     context_digest: str | None
     context_tokens: int | None

@@ -7,6 +7,9 @@ class Settings(BaseSettings):
     database_url: str = "sqlite:///./data/novel_workbench.db"
     app_name: str = "Novel Workbench"
     provider_secret: str = ""
+    local_token: str = ""
+    cors_origins: str = ""
+    diagnostics_retention_days: int = 30
     model_config = SettingsConfigDict(
         env_prefix="NOVEL_WORKBENCH_", env_file=".env", extra="ignore"
     )
