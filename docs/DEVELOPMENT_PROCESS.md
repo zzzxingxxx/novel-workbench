@@ -459,6 +459,17 @@ input → context → llm → parser → approval? → operation → output
 
 验收：从导出包删除 SQLite 数据库缓存后，仍可使用包内的 JSON 清单和正文文件恢复项目，章节、实体、版本和附件引用一致；导入失败时不改变现有项目。
 
+### 15.1 阶段 10 实现状态
+
+- 统一可迁移包 schema 当前为 `1.1`，兼容 `1.0` 并在内存中补齐故事图谱默认字段；导入失败时保持事务回滚。
+- JSON/ZIP 导出包含章节、实体、笔记、操作、实体来源与历史、时间线、分支、伏笔和证据链接；API Key、Provider 密文、AI session 和消息不会进入导出包。
+- ZIP 清单保存文件 SHA-256，导入前校验 `project.json` 或 Markdown 文件，发现篡改时返回 `checksum_mismatch`。
+- Markdown 导出使用可编辑的卷/章节目录结构，同时支持实体和笔记目录；Markdown ZIP 或单个 `.md` 文件可重新导入为独立项目。
+- 新增无额外运行时依赖的 DOCX 和 EPUB 导出，适合 Windows 首发的轻量 Sidecar；复杂排版列入后续版本。
+- React 工作区新增导入/导出抽屉，提供 JSON、ZIP、Markdown、DOCX、EPUB 下载和 JSON/ZIP/Markdown 选择导入。
+
+阶段 10 验收结果：后端 27 项测试通过；`0007_jobs_evaluation` 迁移可升级、降级后再升级；前端 TypeScript/Vite 构建通过。导出包不包含 API Key、Provider 密文、AI 会话或消息正文快照之外的运行凭据。
+
 ## 16. 安全、性能和可观测性（第 16 周）
 
 ### 16.1 安全检查

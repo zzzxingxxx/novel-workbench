@@ -73,3 +73,20 @@ button { border: 0; cursor: pointer; }
 .lore-item strong { display: block; color: #d8dbd0; font-size: 12px; }
 .lore-item span { display: block; margin-top: 4px; color: #a5b08f; font: 9px 'DM Mono', monospace; }
 .lore-item p { margin: 7px 0 0; color: #858f80; font-size: 10px; line-height: 1.5; }
+.transfer-panel { width: min(760px, 100%); }
+.transfer-body { padding: 18px 20px 22px; }
+.transfer-section { padding-bottom: 18px; border-bottom: 1px solid #30332d; }
+.transfer-section + .transfer-section { padding-top: 18px; border-bottom: 0; }
+.transfer-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; }
+.transfer-action { min-height: 86px; display: flex; flex-direction: column; align-items: flex-start; gap: 7px; padding: 11px; color: #c7cfbd; background: #282c26; border: 1px solid #3e4739; border-radius: 5px; text-align: left; }
+.transfer-action:hover { color: #e5eadf; background: #30372c; border-color: #718064; }
+.transfer-action:disabled { opacity: .5; cursor: wait; }
+.transfer-action svg { color: #b9c88d; }
+.transfer-action span { font-size: 10px; }
+.transfer-action small { color: #77816f; font: 9px 'DM Mono', monospace; }
+.transfer-file { display: none; }
+.transfer-upload { display: inline-flex; align-items: center; gap: 7px; margin-top: 4px; padding: 9px 12px; color: #252b22; background: #bdcb99; border-radius: 4px; font-size: 10px; }
+.transfer-upload:hover { background: #d5e1ae; }
+.transfer-upload:disabled { opacity: .5; cursor: wait; }
+.transfer-import p { margin: 10px 0 0; color: #737d70; font-size: 10px; }
+@media (max-width: 650px) { .transfer-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }

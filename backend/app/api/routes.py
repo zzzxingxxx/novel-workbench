@@ -137,7 +137,15 @@ from app.services.domain import create_operation as create_operation_service
 from app.services.jobs import run_job
 from app.services.prompts import build_prompt, validate_prompt
 from app.services.search import rebuild_project_index, search_project
-from app.services.transfer import decode_import_bytes, export_json, export_zip, import_project
+from app.services.transfer import (
+    decode_import_bytes,
+    export_docx,
+    export_epub,
+    export_json,
+    export_markdown_zip,
+    export_zip,
+    import_project,
+)
 
 router = APIRouter(prefix="/api/v1")
 
@@ -1106,7 +1114,7 @@ def export_project(project_id: str, format: str = "json", db: Session = Depends(
     )
     if format == "json":
         return Response(
-            export_json(project, operations),
+            export_json(project, operations, db),
             media_type="application/json",
             headers={
                 "Content-Disposition": (
@@ -1116,7 +1124,7 @@ def export_project(project_id: str, format: str = "json", db: Session = Depends(
         )
     if format == "zip":
         return Response(
-            export_zip(project, operations),
+            export_zip(project, operations, db),
             media_type="application/zip",
             headers={
                 "Content-Disposition": (
@@ -1124,8 +1132,33 @@ def export_project(project_id: str, format: str = "json", db: Session = Depends(
                 )
             },
         )
+    if format == "markdown":
+        filename = f'attachment; filename="novel-workbench-{project.id[:8]}-markdown.zip"'
+        return Response(
+            export_markdown_zip(project, operations, db),
+            media_type="application/zip",
+            headers={"Content-Disposition": filename},
+        )
+    if format == "docx":
+        filename = f'attachment; filename="novel-workbench-{project.id[:8]}.docx"'
+        return Response(
+            export_docx(project, operations, db),
+            media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            headers={"Content-Disposition": filename},
+        )
+    if format == "epub":
+        filename = f'attachment; filename="novel-workbench-{project.id[:8]}.epub"'
+        return Response(
+            export_epub(project, operations, db),
+            media_type="application/epub+zip",
+            headers={"Content-Disposition": filename},
+        )
     raise HTTPException(
-        422, detail={"code": "invalid_format", "message": "format must be json or zip"}
+        422,
+        detail={
+            "code": "invalid_format",
+            "message": "format must be json, zip, markdown, docx or epub",
+        },
     )
 
 
